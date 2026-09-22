@@ -1,0 +1,12 @@
+[project]
+name = "langgraph-financial-agent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=2.24.0",
+    "langchain>=1.4.2",
+    "langchain-google-genai>=4.4.0",
+    "langgraph>=1.2.12",
+    "langsmith>=0.14.0",
+    "python-dotenv>=1.2.3",
+]
