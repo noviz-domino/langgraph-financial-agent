@@ -16,8 +16,9 @@
 #       인증(로그인)은 범위 밖. 모든 조회·변경은 이 사용자의 데이터만 대상으로 한다 (인가)
 
 # TODO: 조회 함수 (승인 불필요)
-#       - account_list_with_balance(data, account=None)
-#         account가 없으면 내 계좌 전체, 있으면 그 별명의 계좌만
+#       - account_list_with_balance(data, accounts=None)
+#         accounts가 비어 있으면 내 계좌 전체, 있으면 그 이름의 계좌들만
+#         이름은 understand에서 이미 "내 계좌 이름 목록" 중에서 골라진 값 (검색이 아니라 걸러내기만 함)
 
 # TODO: 변경 Handler (승인 필요) — 클래스 이름은 intent 이름을 PascalCase로 바꾼 것
 #       - TransferInstantHandler      intent "transfer_instant"
