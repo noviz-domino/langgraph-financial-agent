@@ -51,7 +51,7 @@ def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> 
         balance     숫자 그대로 (520000). "520,000원"처럼 꾸미는 건 respond의 일
 
     내 계좌에 없는 이름이 들어오면 ValueError — 앞 단계가 약속(허용 목록 안의 이름)을 어긴 버그이므로
-    조용히 빼지 않고 드러낸다 (기획서 설계 원칙 6).
+    조용히 빼지 않고 드러낸다 (docs/설계서.md 설계 원칙 6).
     """
     mine = _my_accounts(data)
 

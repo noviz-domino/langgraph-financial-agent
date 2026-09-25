@@ -2,7 +2,7 @@
 
 Step 3 (지금): 조회 경로만 — START → understand → route_request → read_task → respond → END
 Step 5 이후:  plan_change, confirm_change 등 승인 경로 노드가 추가된다.
-설계 근거는 docs/기획서.md와 devlog 참고.
+설계는 docs/설계서.md, 바뀐 이유는 docs/설계변경기록.md와 devlog 참고.
 
 LLM을 부르는 곳은 understand 한 군데뿐이다.
 사람의 말이 들어오는 입구에서만 LLM이 번역하고, 안쪽은 전부 코드로 처리한다.
