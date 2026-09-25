@@ -33,7 +33,15 @@ RULES = {
     "ids_valid":       "5. ID 중복 없음, 가리키는 대상이 실제로 존재",
     "values_valid":    "6. 금액은 0보다 큰 정수, 거래 유형은 deposit/withdrawal",
     "no_future":       "7. 기준 시각보다 미래의 거래 없음",
+    "names_unique":    "8. 같은 소유자의 계좌 별명·카드 이름은 겹치지 않음",
 }
+
+# 규칙 8의 검사 대상: (최상위 키, 그 안에서 이름 역할을 하는 필드)
+# LLM은 이름으로 고르고 저장은 ID로 하므로, 한 사람 안에서 이름 → ID가 정확히 1:1이어야 한다
+NAME_FIELDS = [
+    ("accounts", "nickname"),
+    ("cards", "name"),
+]
 
 # ID 중복을 검사할 대상: (최상위 키, 그 안에서 ID 역할을 하는 필드 이름)
 ID_FIELDS = [
@@ -64,6 +72,16 @@ def check_integrity(data: dict, now: datetime | None = None) -> dict[str, list[s
         ids = [item[id_field] for item in data[collection]]
         for dup in sorted({i for i in ids if ids.count(i) > 1}):
             errors["ids_valid"].append(f"{collection}에 {dup} 중복")
+
+    # ── 규칙 8: 같은 소유자 안에서 이름 중복 ─────────────────
+    # 다른 소유자끼리는 겹쳐도 된다 (user_01과 user_02가 둘 다 "생활비"를 가진 것은 정상)
+    for collection, name_field in NAME_FIELDS:
+        seen = set()                                          # (소유자, 이름) 쌍을 모아둠
+        for item in data[collection]:
+            key = (item["owner_id"], item[name_field])
+            if key in seen:
+                errors["names_unique"].append(f"{item['owner_id']}의 {collection}에 '{item[name_field]}' 중복")
+            seen.add(key)
 
     # ID로 바로 찾아 쓰기 위한 사전 (예: accounts["acc_001"] → 생활비 계좌 정보)
     accounts = {a["account_id"]: a for a in data["accounts"]}
