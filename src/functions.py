@@ -11,7 +11,7 @@
 필요한 slot 목록은 Handler가 아니라 intents.py에 있다.
 (같은 정보를 두 곳에 적으면 결국 어긋나므로 한 곳에만 둔다)
 
-단독 실행:  uv run python src/functions.py   (Step 2 완료 기준 자체 확인)
+단독 실행:  uv run python src/functions.py   (Step 2·3 완료 기준 자체 확인, API 호출 없음)
 """
 
 CURRENT_USER_ID = "user_01"   # 인증(로그인)은 범위 밖. 모든 조회·변경은 이 사용자의 데이터만 대상으로 한다 (인가)
@@ -23,6 +23,21 @@ CURRENT_USER_ID = "user_01"   # 인증(로그인)은 범위 밖. 모든 조회·
 def _my_accounts(data: dict) -> list[dict]:
     """현재 사용자의 계좌만 돌려준다 (인가). 다른 소유자의 계좌는 여기서 걸러진다."""
     return [acc for acc in data["accounts"] if acc["owner_id"] == CURRENT_USER_ID]
+
+
+def _my_cards(data: dict) -> list[dict]:
+    """현재 사용자의 카드만 돌려준다 (인가)."""
+    return [card for card in data["cards"] if card["owner_id"] == CURRENT_USER_ID]
+
+
+def my_account_names(data: dict) -> list[str]:
+    """내 계좌 이름 목록. understand가 LLM에게 줄 허용 목록을 만들 때 쓴다 (이름만, 잔액은 없음)."""
+    return [acc["nickname"] for acc in _my_accounts(data)]
+
+
+def my_card_names(data: dict) -> list[str]:
+    """내 카드 이름 목록. 허용 목록용."""
+    return [card["name"] for card in _my_cards(data)]
 
 
 def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> list[dict]:
@@ -56,6 +71,29 @@ def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> 
     ]
 
 
+def format_account_list_with_balance(rows: list[dict]) -> str:
+    """조회 결과를 사용자에게 보여줄 문장으로 만든다 (정해진 틀, LLM 사용 안 함).
+
+    숫자는 코드가 그대로 옮기므로 자릿수가 틀릴 일이 없다. account_id는 보여주지 않는다.
+    """
+    if len(rows) == 1:
+        row = rows[0]
+        return f"{row['nickname']} 계좌 잔액은 {row['balance']:,}원입니다."
+    lines = [f"- {row['nickname']}: {row['balance']:,}원" for row in rows]
+    return "계좌 잔액입니다.\n" + "\n".join(lines)
+
+
+# 조회 업무 표 — intent 이름 → {실행 함수, 문장 틀}
+# graph.py의 read_task와 respond는 이 표에서 찾아 쓰기만 한다 → 조회 업무가 늘어도 그래프는 그대로
+# 키 목록은 intents.py의 READ_INTENTS와 정확히 같아야 한다 (graph.build_graph가 시작할 때 확인)
+READ_TASKS = {
+    "account_list_with_balance": {
+        "run": account_list_with_balance,
+        "format": format_account_list_with_balance,
+    },
+}
+
+
 # ── 변경 (승인 필요) — Step 5, 7에서 만든다 ─────────────────────
 # TODO: TransferInstantHandler      intent "transfer_instant"
 # TODO: CardLockTemporaryHandler    intent "card_lock_temporary"
@@ -64,7 +102,7 @@ def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> 
 
 # ── 단독 실행: Step 2 완료 기준 확인 ─────────────────────────────
 def _self_check() -> None:
-    """구현계획 Step 2의 완료 기준을 확인한다. 작업용 복사본을 읽기만 하고 바꾸지 않는다."""
+    """구현계획 Step 2·3의 완료 기준을 확인한다. 작업용 복사본을 읽기만 하고 바꾸지 않는다."""
     import copy
     from data_store import load                               # 확인할 때만 필요해서 여기서 불러온다. save는 불러오지 않는다
 
@@ -94,6 +132,14 @@ def _self_check() -> None:
 
     everything[0]["balance"] = 0                              # 받은 결과를 일부러 고쳐봐도
     results.append(("조회가 데이터를 바꾸지 않음", data == before))
+
+    # Step 3에서 추가한 것
+    from intents import READ_INTENTS
+    results.append(("내 계좌 이름 4개, 내 카드 이름 3개 (user_02 제외)",
+                    len(my_account_names(data)) == 4 and len(my_card_names(data)) == 3))
+    results.append(("문장 틀: 1개면 한 문장, 금액에 쉼표",
+                    format_account_list_with_balance(one) == "생활비 계좌 잔액은 520,000원입니다."))
+    results.append(("READ_TASKS 키 = intents.py의 READ_INTENTS", set(READ_TASKS) == READ_INTENTS))
 
     for description, passed in results:
         print(f"[{'OK  ' if passed else 'FAIL'}] {description}")

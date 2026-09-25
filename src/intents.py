@@ -34,6 +34,7 @@ slot(값을 담는 빈칸) 규칙 — 2026-09-26 수정
 INTENTS = {
     # ── 조회 (승인 불필요) ─────────────────────────────────────
     "account_list_with_balance": {
+        "label": "계좌 조회",            # 사용자에게 보여줄 짧은 이름 (안내 문장에 쓴다)
         "desc": "계좌 목록과 잔액 조회. 계좌를 지정하면 그 계좌들만 보여준다",
         "kind": "read",
         "required": [],
@@ -41,12 +42,14 @@ INTENTS = {
     },
     # ── 변경 (승인 필요) ───────────────────────────────────────
     "transfer_instant": {
+        "label": "즉시이체",
         "desc": "즉시이체. 내 계좌 사이에서 지정한 금액을 옮긴다",
         "kind": "write",
         "required": ["from_account", "to_account", "amount"],
         "optional": [],
     },
     "card_lock_temporary": {
+        "label": "카드 일시 잠금",
         "desc": "카드 일시 잠금. 분실 정지와 달리 잠금 해제로 되돌릴 수 있다",
         "kind": "write",
         "required": ["card"],
@@ -58,3 +61,8 @@ INTENTS = {
 # frozenset = 한 번 만들면 바꿀 수 없는 집합. 실행 중에 실수로 추가·삭제되는 것을 막는다.
 READ_INTENTS = frozenset(name for name, info in INTENTS.items() if info["kind"] == "read")
 WRITE_INTENTS = frozenset(name for name, info in INTENTS.items() if info["kind"] == "write")
+
+# ── INTENTS 표 밖의 특별한 값 ─────────────────────────────────────
+UNSUPPORTED = "unsupported"          # intent — 이 에이전트가 처리할 수 없는 요청 (LLM이 고른다)
+NOT_UNDERSTOOD = "not_understood"    # intent — LLM 호출이 실패했거나 형식을 어겼다 (코드가 넣는다)
+UNCERTAIN = "uncertain"              # slot — 계좌·카드를 말했지만 목록 중 어느 것인지 모른다 (LLM이 고른다)
