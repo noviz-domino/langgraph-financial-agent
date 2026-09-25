@@ -30,3 +30,4 @@ logs/
 
 # atomic write 도중 남은 임시 파일
 data/*.tmp
+
