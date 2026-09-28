@@ -1,16 +1,17 @@
 """State 정의, 노드, 조건부 Edge를 담당한다.
 
-조회 경로 (Step 3):  START → understand → read_task → respond → END
-변경 경로 (Step 5):  START → understand → plan_change → confirm_change(🛑 interrupt) → apply_change → respond → END
-                     검사 불가면 respond로 바로 간다. 애매한 답이면 confirm_change를 다시 보여준다
-                     승인 화면까지 간 요청은 모두 record_result를 거쳐 처리 기록(requests)을 남긴다 (Step 6)
-되묻기(ask_more, 루프 1)·수정(루프 2)은 Step 8.
-설계는 docs/설계서.md, 바뀐 이유는 docs/설계변경기록.md와 devlog 참고.
+조회   START → understand → read_task → respond → END
+변경   START → understand → plan_change → confirm_change 🛑 → apply_change → record_result → respond → END
+       업무상 거절이면 plan_change에서 respond로. 취소·만료면 confirm_change에서 record_result로
+루프 1 정보가 부족하면 understand → ask_more 🛑 → (답) → understand
+루프 2 승인 화면에서 예/취소가 아닌 답 → understand(수정 해석) → plan_change → confirm_change
+🛑 = interrupt로 멈추는 곳. 설계는 docs/설계서.md, 바뀐 이유는 docs/설계변경기록.md 참고.
 
 LLM을 부르는 곳은 understand 한 군데뿐이다.
 사람의 말이 들어오는 입구에서만 LLM이 번역하고, 안쪽은 전부 코드로 처리한다.
 
-단독 실행:  uv run python src/graph.py   (Step 3~8 완료 기준 확인 — Gemini API를 실제로 호출함)
+단독 실행:  uv run python src/graph.py   (그래프 모양을 Mermaid로 출력, API 호출 없음)
+대화 확인:  uv run python src/scenarios.py
 """
 
 import logging
@@ -23,7 +24,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 from pydantic import Field, create_model
 
 import data_store
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "gemini-3.5-flash-lite"
 APPROVAL_TTL = timedelta(minutes=5)       # 승인 유효 시간 — 처리안을 만든 뒤 이 시간이 지난 "예"는 실행하지 않는다 (Step 5 결정 4)
 
-# 승인 답 — 글자가 정확히 같을 때만 인정한다 (앞뒤 공백·문장부호는 무시). 그 밖의 답은 다시 묻는다 (Step 5 결정 3)
+# 승인 답 — 글자가 정확히 같을 때만 인정한다 (앞뒤 공백·문장부호는 무시). 그 밖의 답은 수정 요청으로 본다 (Step 8)
 # 부분 일치를 쓰지 않는 이유: "아니요, 진행하지 마"가 "진행"에 걸려 승인되면 안 된다
 APPROVE_WORDS = {"예", "네", "응", "ㅇㅇ", "승인", "진행", "진행해", "진행해줘", "보내", "보내줘", "좋아", "오케이", "네 진행해"}
 REJECT_WORDS = {"취소", "아니요", "아니오", "거절", "그만", "안 할래", "하지 마", "취소해", "취소해줘"}
@@ -57,7 +58,7 @@ def _now() -> datetime:
 
 # ── State ────────────────────────────────────────────────────────
 class AgentState(TypedDict, total=False):
-    """노드들이 주고받는 데이터. 지금 경로에서 쓰는 칸만 둔다 (승인 관련 칸은 Step 5, 8에서 추가).
+    """노드들이 주고받는 데이터. 다른 노드가 읽는 칸만 둔다 (판단 근거 reason은 로그로).
 
     messages  대화 내내 쌓인다 (add_messages: 같은 메시지가 다시 오면 중복으로 쌓지 않고 교체)
               기록용. LLM에게는 마지막 메시지 하나만 넘긴다 (맥락은 아래 intent·params로)
@@ -112,7 +113,8 @@ SYSTEM_PROMPT = """너는 은행 앱의 요청 해석기다. 사용자의 가장
 1. 사용자가 말하지 않은 칸은 비워둔다. 절대 추측해서 채우지 않는다. (아래 7·8번으로 이어받는 경우만 예외)
 2. 계좌·카드는 위 목록의 이름 중에서만 고른다. 뜻으로 말해도("여행 갈 때 쓰는 통장") 알맞은 이름을 고른다.
 3. 계좌·카드를 말했지만 목록 중 어느 것인지 확신할 수 없으면 {uncertain}을 고른다.
-   목록에 없는 종류의 계좌("주식 계좌")라도 계좌에 대한 업무를 원하면 {unsupported}가 아니라 그 업무 + {uncertain}이다.
+   목록에 없는 계좌·카드("주식 계좌", "주식 카드")라도 그 계좌·카드에 대한 업무를 원하면
+   {unsupported}가 아니라 그 업무 + {uncertain}이다.
 4. 한 문장에 계좌가 여럿이면 역할을 나눈다. "~에서"는 출금 계좌, "~으로"·"~에"는 입금 계좌.
 5. 금액은 원 단위 정수로 바꾼다 ("10만 원" → 100000). 음수여도 바꾸지 말고 그대로 옮긴다.
 6. 이전 상태를 보고 "이번 턴의 최종 값"을 통째로 채운다.
@@ -185,7 +187,6 @@ def _find_inferred(params: dict, utterance: str, previous_params: dict) -> list[
     return found
 
 
-
 def _interpretation_notes(inferred: list[dict]) -> str:
     """해석 안내 문장. 추측·이어받음이 없으면 빈 문자열 (필요할 때만 보여준다 — 승인 피로 대비)."""
     lines = []
@@ -207,7 +208,8 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     만들기 전에 API 키를 불러온다. 키가 없으면 여기서 ConfigError — 시작할 때 바로 알린다 (fail fast).
     """
     load_env()
-    return ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0)   # temperature 0: 같은 입력에 최대한 같은 답
+    # temperature는 주지 않는다 — 이 모델은 무시하고 경고만 낸다. 답이 흔들려도 되도록 중요한 판단은 코드가 한다
+    return ChatGoogleGenerativeAI(model=MODEL_NAME)
 
 
 def _build_schema(account_names: list[str], card_names: list[str]):
@@ -252,7 +254,6 @@ def _turn_reset(state: AgentState) -> dict:
     return reset
 
 
-
 def understand(state: AgentState) -> dict:
     """사용자 말을 intent와 slot으로 바꾼다. LLM을 부르는 유일한 노드."""
     data = data_store.load()
@@ -278,10 +279,10 @@ def understand(state: AgentState) -> dict:
         parsed = llm.invoke([SystemMessage(content=system), utterance])
     except Exception:
         logger.exception("understand: LLM 호출 또는 형식 검증에 실패했습니다")   # 오류와 traceback을 함께 기록 (29번)
-        return {"intent": NOT_UNDERSTOOD, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
-
-    if parsed is None:                                          # 구조화 결과가 비어서 오는 경우
-        logger.warning("understand: LLM이 빈 결과를 돌려줬습니다")
+        parsed = None
+    if parsed is None:                                          # 실패했거나 구조화 결과가 비어서 온 경우
+        if state.get("loop") == "revise":                       # 수정 해석에 실패 → 승인을 기다리던 요청은 잃지 않는다
+            return {**_turn_reset(state), "decision": "unclear"}
         return {"intent": NOT_UNDERSTOOD, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
 
     # 고른 intent에 해당하는 slot만 남기고 나머지 칸은 버린다 (intents.py가 기준)
@@ -359,20 +360,25 @@ def _question(missing: dict) -> str:
 # ── 조건부 Edge ──────────────────────────────────────────────────
 # 노드가 아니라 방향만 정하는 함수들이라 State를 바꾸지 않는다.
 def route_request(state: AgentState) -> Literal["ask_more", "read_task", "plan_change", "respond"]:
-    """정보 부족 → ask_more / 조회 → read_task / Handler가 있는 변경 → plan_change / 그 외 → respond."""
+    """정보 부족 → ask_more / 조회 → read_task / 변경 → plan_change / 그 외(처리 불가·이해 실패) → respond."""
     intent = state["intent"]
     if state.get("missing"):
         return "ask_more" if state.get("ask_count", 0) < MAX_ASKS else "respond"   # 너무 여러 번 물었으면 멈춘다
     if intent in READ_INTENTS:
         return "read_task"
-    if intent in HANDLERS:
+    if intent in WRITE_INTENTS:
         return "plan_change"
     return "respond"
 
 
-def route_ask(state: AgentState) -> Literal["understand", "respond"]:
-    """되묻기의 답 → understand로 돌아가 다시 해석 (루프 1) / "취소" → 응답."""
-    return "respond" if state.get("decision") == "stop" else "understand"
+def route_ask(state: AgentState) -> Literal["understand", "record_result", "respond"]:
+    """되묻기의 답 → understand로 돌아가 다시 해석 (루프 1) / "취소" → 응답.
+
+    승인 화면까지 갔던 요청(수정하다 되묻기로 온 경우)이면 "취소"도 기록한다 — 승인 화면까지 간 요청은 모두 기록.
+    """
+    if state.get("decision") != "stop":
+        return "understand"
+    return "record_result" if state.get("plan") else "respond"
 
 
 def route_validation(state: AgentState) -> Literal["confirm_change", "respond"]:
@@ -383,7 +389,7 @@ def route_validation(state: AgentState) -> Literal["confirm_change", "respond"]:
     return "confirm_change" if state.get("plan") else "respond"
 
 
-def route_decision(state: AgentState) -> Literal["apply_change", "confirm_change", "understand", "record_result"]:
+def route_decision(state: AgentState) -> Literal["apply_change", "understand", "record_result"]:
     """승인 → 실행 / 수정 요청 → understand로 (루프 2) / 거절·만료·수정 초과 → 기록."""
     decision = state["decision"]
     if decision == "approve":
@@ -410,7 +416,7 @@ def ask_more(state: AgentState) -> dict:
 def read_task(state: AgentState) -> dict:
     """조회 업무를 실행한다. 어떤 함수를 부를지는 READ_TASKS 표에서 찾는다. (형식 문제는 앞에서 되물었다)"""
     task = READ_TASKS[state["intent"]]
-    return {"result": {"ok": True, "data": task["run"](data_store.load(), **state.get("params", {}))}}
+    return {"result": {"data": task["run"](data_store.load(), **state.get("params", {}))}}
 
 
 # ── plan_change: 처리안 만들기 (아직 아무것도 바꾸지 않는다) ─────
@@ -424,7 +430,7 @@ def plan_change(state: AgentState) -> dict:
     intent, previous, params = state["intent"], state.get("plan"), state.get("params", {})
     plan, reason = HANDLERS[intent].validate(params, data_store.load())
     if reason:
-        result = {"ok": False, "notice": "rejected", "reason": reason}
+        result = {"notice": "rejected", "reason": reason}
         if previous:                                            # 수정안이 걸림 → params도 이전 처리안의 값으로 되돌린다
             return {"result": result, "decision": "revise_rejected", "params": previous["params"]}
         return {"result": result}
@@ -493,7 +499,7 @@ def apply_change(state: AgentState) -> dict:
     data = data_store.load()
     plan, reason = handler.validate(state["params"], data)
     if reason:
-        return {"result": {"ok": False, "notice": "rejected",
+        return {"result": {"notice": "rejected",
                            "reason": f"승인하시는 사이 상황이 바뀌어 실행하지 않았어요.\n{reason}"}}
 
     message, refs = handler.apply(plan, data, _now())
@@ -502,13 +508,14 @@ def apply_change(state: AgentState) -> dict:
         data_store.save(data)                                   # 무결성 검사(세 번째 안전망) + atomic write (+ 재시도)
     except DataStoreError:
         logger.exception("apply_change: 저장 실패 — 파일은 이전 상태 그대로")
-        return {"result": {"ok": False, "notice": "rejected",
+        return {"result": {"notice": "rejected",
                            "reason": "장부에 저장하지 못해 실행하지 않았어요. 잠시 후 다시 시도해 주세요."}}
-    return {"result": {"ok": True, "message": message, "recorded": True}}
+    return {"result": {"message": message, "recorded": True}}
 
 
 # ── record_result: 처리 기록 (승인 화면까지 간 요청만) ───────────
-RECORD_STATUS = {"reject": "cancelled", "too_many": "cancelled", "expired": "expired"}   # 그 밖(승인 후 실패)은 failed
+RECORD_STATUS = {"reject": "cancelled", "stop": "cancelled", "too_many": "cancelled",   # 그 밖(승인 후 실패)은 failed
+                 "expired": "expired"}
 RECORD_REASON = {"too_many": f"수정 요청이 {MAX_REVISIONS}번을 넘음"}
 
 
@@ -546,8 +553,6 @@ def respond(state: AgentState) -> dict:
         text = "알겠어요, 요청을 그만둘게요."
     elif state.get("missing"):                                  # 되묻기를 MAX_ASKS번 해도 채우지 못함
         text = "여러 번 여쭤봐도 필요한 정보를 알 수 없어 요청을 멈출게요. 처음부터 다시 말씀해 주세요."
-    elif intent in WRITE_INTENTS and intent not in HANDLERS:
-        text = f"{INTENTS[intent]['label']} 기능은 아직 준비 중이에요."
     elif decision == "reject":
         label = INTENTS[intent]["label"]
         text = f"{label}{josa(label, '을/를')} 취소했어요. 아무것도 바뀌지 않았어요."
@@ -575,9 +580,8 @@ def build_graph(checkpointer=None):
     missing = READ_INTENTS - READ_TASKS.keys()                  # intents.py와 functions.py의 약속 확인
     if missing:
         raise RuntimeError(f"READ_TASKS에 조회 함수가 없는 intent가 있습니다: {sorted(missing)}")
-    unknown = HANDLERS.keys() - WRITE_INTENTS
-    if unknown:
-        raise RuntimeError(f"HANDLERS에 변경 intent가 아닌 키가 있습니다: {sorted(unknown)}")
+    if HANDLERS.keys() != WRITE_INTENTS:                        # 변경 업무마다 Handler가 정확히 하나
+        raise RuntimeError(f"HANDLERS와 변경 intent가 맞지 않습니다: {sorted(HANDLERS)} / {sorted(WRITE_INTENTS)}")
 
     builder = StateGraph(AgentState)
     for name, node in [("understand", understand), ("ask_more", ask_more), ("read_task", read_task),
@@ -598,263 +602,8 @@ def build_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-# ── 단독 실행: Step 3~8 완료 기준 확인 (Gemini API 호출 41회) ─────
-def _self_check() -> None:
-    """구현계획 Step 3~8의 완료 기준을 확인한다.
-
-    이어 묻기 확인은 한 대화로, 나머지는 질문마다 새 대화로 나눈다.
-    (한 대화로 모두 물으면 앞 질문이 뒤 질문의 해석에 영향을 줄 수 있어서, 무엇을 확인하는지 흐려진다)
-    """
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
-    logging.getLogger(__name__).setLevel(logging.INFO)          # 이 모듈의 판단 근거 로그만 보이게 (라이브러리 로그는 경고 이상만)
-    graph = build_graph()
-    results = []
-
-    nodes = set(graph.get_graph().nodes) - {"__start__", "__end__"}
-    results.append(("노드 8개 (조회 + 되묻기 + 승인 + 기록)",
-                    nodes == {"understand", "ask_more", "read_task", "plan_change", "confirm_change",
-                              "apply_change", "record_result", "respond"}))
-
-    def shown(state) -> str:                                    # 사용자가 화면에서 보는 문장 — 멈췄으면 질문, 아니면 답
-        interrupts = state.get("__interrupt__")
-        return interrupts[0].value["prompt"] if interrupts else state["messages"][-1].content
-
-    def ask(text: str, thread_id: str):                         # 새 요청 (멈춰 있던 질문이 있으면 버리고 처음부터)
-        config = {"configurable": {"thread_id": thread_id}}    # thread_id가 같으면 같은 대화 (Checkpointer가 기억)
-        state = graph.invoke({"messages": [HumanMessage(content=text)]}, config)
-        return state, shown(state)
-
-    def resume(text: str, thread_id: str):                      # 멈춘 질문(되묻기·승인)에 답하기
-        config = {"configurable": {"thread_id": thread_id}}
-        state = graph.invoke(Command(resume=text), config)
-        return state, shown(state)
-
-    def record(question: str, state: dict, answer: str, passed: bool):
-        results.append((f"{question} -> {' / '.join(answer.splitlines()[:2])}", passed))
-
-    # ① 이어 묻기 확인 — 한 대화 안에서. 이전 상태를 유지·추가·변경·전체로 바꾸는지 (Step 4, B안)
-    def accounts_of(state):
-        return set(state.get("params", {}).get("accounts", []))
-
-    continuity = [
-        ("생활비랑 저축 잔액 보여줘", lambda s, a: accounts_of(s) == {"생활비", "저축"}),
-        ("여행 자금도",             lambda s, a: accounts_of(s) == {"생활비", "저축", "여행 자금"}),   # 추가
-        ("비상금은?",               lambda s, a: accounts_of(s) == {"비상금"}),                    # 대상 변경
-        ("잔액 다시 알려줘",         lambda s, a: accounts_of(s) == {"비상금"}),                    # 말 안 함 = 유지 (전체 아님)
-        ("내 계좌 전부 보여줘",      lambda s, a: all(n in a for n in ["생활비", "저축", "여행 자금", "비상금"])),
-    ]
-    for question, check in continuity:
-        state, answer = ask(question, "continuity")
-        record(question, state, answer, check(state, answer))
-
-    # ② 업무가 바뀔 때 — 직전 계좌가 하나면 이어받고, 여럿이면 비운다 (Step 4 결정 1-2)
-    state, answer = ask("생활비 잔액 얼마야?", "switch-pointed")
-    state, answer = ask("거기서 저축으로 3만 원 보내줘", "switch-pointed")
-    record("(생활비 조회 후) 거기서 저축으로 3만 원", state, answer,
-           state.get("params") == {"from_account": "생활비", "to_account": "저축", "amount": 30000})
-    state, answer = ask("아니 5만 원", "switch-pointed")                                       # 같은 업무 → 금액만
-    record("아니 5만 원", state, answer,
-           state.get("params") == {"from_account": "생활비", "to_account": "저축", "amount": 50000})
-
-    state, answer = ask("생활비 잔액 얼마야?", "switch-silent")
-    state, answer = ask("저축으로 3만 원 보내줘", "switch-silent")
-    record("(생활비 조회 후) 저축으로 3만 원 -> 출금 = 생활비", state, answer,
-           state.get("params", {}).get("from_account") == "생활비")
-
-    state, answer = ask("생활비랑 저축 잔액 보여줘", "switch-many")
-    state, answer = ask("여행 자금으로 3만 원 보내줘", "switch-many")
-    record("(두 계좌 조회 후) 여행 자금으로 3만 원 -> 출금 비움", state, answer,
-           "from_account" not in state.get("params", {}))
-
-    # ③ 보여준 후보를 순서로 고르기 — 되묻기(ask_more)에 답하는 길 (Step 8 루프 1)
-    state, answer = ask("주식 계좌 잔액 알려줘", "candidates")
-    candidates = (state.get("missing") or {}).get("candidates", [])
-    state, answer = resume("두 번째 거", "candidates")
-    record("(후보를 본 뒤) 두 번째 거", state, answer,
-           len(candidates) > 1 and accounts_of(state) == {candidates[1]})
-
-    # ② 개별 질문 확인 — 질문마다 새 대화. 앞 질문의 영향을 받지 않게
-    cases = [
-        ("생활비 잔액 얼마야?",                                  # 글자 그대로 말함 → 해석 안내 없이 바로 답
-         lambda s, a: a == "생활비 계좌 잔액은 520,000원입니다."),
-        ("여행 갈 때 쓰는 통장 잔액 알려줘",                      # 뜻으로만 찾을 수 있음 → 찾되 해석을 밝혀야 함
-         lambda s, a: "'여행 자금' 계좌로 이해했어요." in a and "310,000원" in a),
-        ("오늘 날씨 어때?",
-         lambda s, a: s.get("intent") == UNSUPPORTED),
-        ("휴가비 계좌 잔액 알려줘",                                # 없는 이름 → uncertain이거나, 추측했다면 해석을 밝혀야 함
-         lambda s, a: a.startswith("말씀하신 계좌를 찾지 못했어요") or "이해했어요" in a),
-        ("주식 계좌 잔액 알려줘",                                  # 뜻이 통하는 계좌가 없음 → uncertain
-         lambda s, a: a.startswith("말씀하신 계좌를 찾지 못했어요")),
-    ]
-    for number, (question, check) in enumerate(cases):
-        state, answer = ask(question, f"single-{number}")
-        record(question, state, answer, check(state, answer))
-
-    # ④ Step 5 — 즉시이체 + 승인 흐름. 작업용 복사본을 원본으로 되돌리고 시작해서, 끝나면 다시 되돌린다
-    global _clock_offset
-    from functions import _next_id                              # 확인할 때만 필요해서 여기서 불러온다
-    from integrity import check_integrity
-    data_store.reset()
-
-    def waiting_prompt(state) -> str:                           # 승인 화면에서 멈췄으면 그 문장, 아니면 ""
-        interrupts = state.get("__interrupt__")
-        return interrupts[0].value["prompt"] if interrupts else ""
-
-    def ledger() -> dict:                                       # 잔액·거래 (처리 기록 requests는 뺌 — 취소·만료도 기록은 남는다)
-        return {key: value for key, value in data_store.load().items() if key != "requests"}
-
-    def balance(name: str) -> int:
-        return next(a["balance"] for a in data_store.load()["accounts"]
-                    if a["owner_id"] == "user_01" and a["nickname"] == name)
-
-    before = data_store.WORKING_PATH.read_bytes()
-    state, _ = ask("생활비에서 저축으로 10만 원 보내줘", "t-approve")
-    prompt = waiting_prompt(state)
-    record("이체 요청 -> 승인 화면에서 멈춤", state, prompt,
-           "100,000원을 즉시이체" in prompt and "420,000원" in prompt)
-    results.append(("승인 전에는 장부가 그대로", data_store.WORKING_PATH.read_bytes() == before))
-    state, answer = resume("예", "t-approve")
-    record("'예' -> 실행", state, answer, balance("생활비") == 420000 and balance("저축") == 1950000)
-    results.append(("실행 후 무결성 9개 규칙 통과", not any(check_integrity(data_store.load()).values())))
-
-    before = ledger()
-    ask("생활비에서 저축으로 10만 원 보내줘", "t-reject")
-    state, answer = resume("취소", "t-reject")
-    record("'취소' -> 잔액·거래 그대로", state, answer, "취소했어요" in answer and ledger() == before)
-
-    ask("생활비에서 저축으로 10만 원 보내줘", "t-unclear")
-    state, _ = resume("음 잠깐만", "t-unclear")
-    prompt = waiting_prompt(state)
-    record("애매한 답 -> 승인 화면을 다시", state, prompt, prompt.startswith("'예' 또는 '취소'로 답해 주세요."))
-    state, answer = resume("취소", "t-unclear")
-    results.append(("다시 보여준 뒤 '취소' -> 끝남", "취소했어요" in answer))
-
-    before = ledger()
-    ask("생활비에서 저축으로 10만 원 보내줘", "t-expired")
-    _clock_offset = APPROVAL_TTL + timedelta(minutes=1)         # 6분 뒤에 "예"를 누른 것처럼
-    state, answer = resume("예", "t-expired")
-    _clock_offset = timedelta(0)
-    record("5분 지난 '예' -> 실행 안 함", state, answer,
-           "승인 시간" in answer and ledger() == before)
-
-    state, answer = ask("비상금에서 저축으로 100만 원 보내줘", "t-insufficient")
-    record("잔액 부족 -> 승인 화면 없이 거절 사유", state, answer,
-           not waiting_prompt(state) and "잔액이 부족해요" in answer)
-
-    ask("생활비 잔액 얼마야?", "t-carried")
-    state, _ = ask("저축으로 3만 원 보내줘", "t-carried")
-    prompt = waiting_prompt(state)
-    record("(생활비 조회 후) 저축으로 3만 원 -> 이어받은 계좌를 밝힘", state, prompt,
-           prompt.startswith("출금 계좌는 방금 보신 '생활비'"))
-    resume("취소", "t-carried")
-
-    ask("비상금에서 저축으로 7만 원 보내줘", "t-changed")      # 비상금 75,000원
-    data = data_store.load()                                    # 승인을 기다리는 사이 다른 곳에서 1만 원 출금
-    data["transactions"].append({
-        "transaction_id": _next_id(data["transactions"], "transaction_id", "tx_"), "owner_id": "user_01",
-        "account_id": "acc_004", "type": "withdrawal", "amount": 10000,
-        "occurred_at": _now().isoformat(timespec="seconds"), "card_id": None, "merchant": "확인용", "transfer_id": None,
-    })
-    next(a for a in data["accounts"] if a["account_id"] == "acc_004")["balance"] -= 10000
-    data_store.save(data)
-    state, answer = resume("예", "t-changed")
-    record("승인 사이 잔액 감소 -> 실행 직전 재검사로 거절", state, answer,
-           "승인하시는 사이" in answer and balance("비상금") == 65000)
-
-    # ⑤ Step 6 — 처리 기록. 위 Step 5 시나리오들이 남긴 기록을 확인한다 (잔액 부족은 승인 화면 전이라 기록 없음)
-    requests = data_store.load()["requests"]
-    statuses = [r["status"] for r in requests]
-    results.append((f"처리 기록: {statuses}",
-                    statuses == ["completed", "cancelled", "cancelled", "expired", "cancelled", "failed"]))
-    results.append(("완료 기록에 transfer_id tr_001, 요청·완료 시각",
-                    requests[0]["details"].get("transfer_id") == "tr_001"
-                    and requests[0]["requested_at"] <= requests[0]["finished_at"]))
-    results.append(("재검사 실패 기록에 사유", "잔액이 부족해요" in (requests[-1]["reason"] or "")))
-
-    # 저장 실패 — 파일 교체가 재시도 횟수만큼 모두 실패. 이체는 안 되고, 실패 기록은 남는다
-    real_replace, calls = data_store.os.replace, []
-
-    def locked_replace(src, dst):
-        calls.append(1)
-        if len(calls) <= data_store.SAVE_ATTEMPTS:              # apply_change의 저장만 실패시키고, 기록 저장은 통과
-            raise PermissionError("잠긴 파일 흉내")
-        real_replace(src, dst)
-
-    ask("생활비에서 저축으로 1만 원 보내줘", "t-savefail")
-    before_balance = balance("생활비")
-    data_store.os.replace = locked_replace
-    try:
-        state, answer = resume("예", "t-savefail")
-    finally:
-        data_store.os.replace = real_replace
-    last = data_store.load()["requests"][-1]
-    record("저장 실패(3번 모두) -> 이체 안 됨, 실패 기록", state, answer,
-           "저장하지 못해" in answer and balance("생활비") == before_balance
-           and last["status"] == "failed" and "저장하지 못해" in last["reason"])
-    # ⑥ Step 7 — 카드 일시 잠금. graph.py에 카드 전용 코드 없이 HANDLERS 한 줄로 동작하는지
-    def card_status(name: str) -> str:
-        return next(c["status"] for c in data_store.load()["cards"] if c["owner_id"] == "user_01" and c["name"] == name)
-
-    state, _ = ask("생활비 카드 잠가줘", "t-card")
-    prompt = waiting_prompt(state)
-    record("카드 잠금 요청 -> 승인 화면", state, prompt, prompt.startswith("생활비 카드를 일시 잠금할게요."))
-    state, answer = resume("예", "t-card")
-    last = data_store.load()["requests"][-1]
-    record("'예' -> locked + 완료 기록(card_id)", state, answer,
-           card_status("생활비 카드") == "locked" and last["status"] == "completed"
-           and last["details"] == {"card_id": "card_001"})
-    state, answer = ask("생활비 카드 잠가줘", "t-card-again")
-    record("이미 잠긴 카드 -> 승인 없이 안내", state, answer,
-           not waiting_prompt(state) and "이미 잠겨 있어요" in answer)
-    state, answer = ask("주식 카드 잠가줘", "t-card-unknown")
-    record("없는 카드 -> 카드 후보로 안내", state, answer,
-           answer.startswith("말씀하신 카드를 찾지 못했어요") and "여행 카드" in answer and "비상금" not in answer)
-
-    # ⑦ Step 8 — 되묻기(루프 1)와 승인 전 수정(루프 2)
-    state, answer = ask("저축으로 10만 원 옮겨줘", "t-ask")
-    record("출금 계좌 없음 -> 되묻기 + 후보", state, answer,
-           answer.startswith("출금 계좌를 알려 주세요.") and "생활비" in answer)
-    state, answer = resume("생활비에서", "t-ask")
-    record("'생활비에서' -> 이전 값(저축, 10만 원) 유지하고 승인 화면", state, answer,
-           "생활비 → 저축, 100,000원을 즉시이체" in answer)
-    resume("취소", "t-ask")
-
-    before_balance = balance("생활비")
-    ask("생활비에서 저축으로 10만 원 보내줘", "t-revise")
-    state, answer = resume("아니, 5만 원만", "t-revise")
-    record("승인 화면에서 '아니, 5만 원만' -> 다시 검사한 승인 화면", state, answer,
-           "50,000원을 즉시이체" in answer)
-    state, answer = resume("생활비 잔액 얼마야?", "t-revise")
-    record("승인 대기 중 다른 업무 -> 지금 요청 유지", state, answer,
-           answer.startswith("'예' 또는 '취소'로 답해 주세요.") and "50,000원" in answer)
-    state, answer = resume("아니 1000만 원으로", "t-revise")
-    record("잔액 넘는 금액으로 수정 -> 사유 + 이전 내용(5만 원)으로 다시", state, answer,
-           "잔액이 부족해요" in answer and "50,000원을 즉시이체" in answer)
-    state, answer = resume("예", "t-revise")
-    record("'예' -> 이전 내용(5만 원)으로 실행", state, answer, balance("생활비") == before_balance - 50000)
-
-    state, answer = ask("카드 잠가줘", "t-card-ask")
-    record("어느 카드인지 없음 -> 카드 후보로 되묻기", state, answer,
-           answer.startswith("카드를 알려 주세요.") and "고를 수 있는 카드: 생활비 카드" in answer)
-    state, answer = resume("저축 카드", "t-card-ask")
-    record("'저축 카드' -> 승인 화면", state, answer, answer.startswith("저축 카드를 일시 잠금할게요."))
-    resume("취소", "t-card-ask")
-
-    count = len(data_store.load()["requests"])
-    ask("여행 자금으로 보내줘", "t-ask-stop")
-    state, answer = resume("취소", "t-ask-stop")
-    record("되묻기 중 '취소' -> 그만두고 기록 없음", state, answer,
-           "그만둘게요" in answer and len(data_store.load()["requests"]) == count)
-
-    results.append(("모든 시나리오 뒤 무결성 10개 규칙 통과", not any(check_integrity(data_store.load()).values())))
-
-    data_store.reset()
-
-    for description, passed in results:
-        print(f"[{'OK  ' if passed else 'FAIL'}] {description}")
-    passed_count = sum(1 for _, passed in results if passed)
-    print(f"결과: {passed_count}/{len(results)} 통과")
-
-
-if __name__ == "__main__":   # 직접 실행했을 때만 확인 코드를 돌린다
-    _self_check()
+# ── 단독 실행: 그래프 모양 확인 (API 호출 없음) ──────────────────
+# 대화 시나리오 확인은 여러 모듈을 함께 쓰므로 src/scenarios.py에 있다.
+if __name__ == "__main__":
+    app = build_graph()
+    print(app.get_graph().draw_mermaid())                       # 노드·Edge를 Mermaid 흐름도 글자로 (docs에 붙여 볼 수 있음)

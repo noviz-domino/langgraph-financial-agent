@@ -21,8 +21,8 @@ from graph import build_graph
 
 EXIT_WORDS = {"종료", "exit", "quit"}
 
-# TODO(Step 5): 재시작 시 진행 중이던 업무가 있으면 확인하고, decision은 비운 뒤 다시 승인받기
-#               (명세: "이전 승인만으로 변경을 자동 실행하지 않는다")
+# TODO(3차, SqliteSaver로 바꿀 때): 재시작 시 진행 중이던 업무가 있으면 확인하고, decision은 비운 뒤 다시 승인받기
+#               (명세: "이전 승인만으로 변경을 자동 실행하지 않는다"). 지금은 InMemorySaver라 끄면 대기 중 요청이 사라진다
 
 
 def run_turn(graph, config: dict, text: str, waiting: bool) -> dict:

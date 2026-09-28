@@ -3,15 +3,16 @@
 그래프(graph.py)는 "절차"만 알고, "무슨 업무인지"는 여기 함수와 Handler들이 안다.
 업무를 추가할 때 그래프를 고치지 않고 이 파일(과 intents.py)에만 추가하는 것이 목표.
 
-각 Handler가 반드시 갖춰야 할 3가지 (Step 5부터):
-    validate(params, data) -> (plan, error)   업무 검사 후 처리안을 만든다. 거절은 에러가 아니라 사유로 돌려준다
-    describe(plan)         -> str             승인 화면에 보여줄 문장을 만든다
-    apply(plan, data)      -> result          실제로 데이터를 바꾼다
+각 Handler가 반드시 갖춰야 할 4가지:
+    validate(params, data)  -> (plan, None) 또는 (None, 사유)   업무 검사 후 처리안. 거절은 에러가 아니라 사유 문장
+    describe(plan)          -> str                             승인 화면에 보여줄 문장
+    details(plan)           -> dict                            처리 기록(requests)에 남길 ID·값
+    apply(plan, data, now)  -> (완료 문장, 기록에 더할 값)       data를 실제로 바꾼다 (저장은 부르는 쪽이)
 
 필요한 slot 목록은 Handler가 아니라 intents.py에 있다.
 (같은 정보를 두 곳에 적으면 결국 어긋나므로 한 곳에만 둔다)
 
-단독 실행:  uv run python src/functions.py   (Step 2·3 완료 기준 자체 확인, API 호출 없음)
+단독 실행:  uv run python src/functions.py   (조회 함수·Handler 자체 확인, API 호출 없음)
 """
 
 from datetime import datetime
@@ -251,9 +252,9 @@ HANDLERS = {
 }
 
 
-# ── 단독 실행: Step 2 완료 기준 확인 ─────────────────────────────
+# ── 단독 실행: 조회 함수·Handler 확인 (API 호출 없음) ──────────────
 def _self_check() -> None:
-    """구현계획 Step 2·3의 완료 기준을 확인한다. 작업용 복사본을 읽기만 하고 바꾸지 않는다."""
+    """구현계획 Step 2·5·6·7의 업무 코드 완료 기준을 확인한다. 작업용 복사본을 읽기만 하고, 바꾸는 확인은 복사한 dict에서."""
     import copy
     from data_store import load                               # 확인할 때만 필요해서 여기서 불러온다. save는 불러오지 않는다
 
