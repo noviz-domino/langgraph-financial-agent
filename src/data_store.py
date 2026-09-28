@@ -9,6 +9,8 @@
     2. 작업용 복사본이 없으면 load()가 원본에서 자동으로 만든다 (lazy initialization)
     3. atomic write — 같은 폴더의 임시 파일에 다 쓰고, 디스크에 기록한 뒤, 이름을 바꿔 교체한다
     4. UTF-8, 한글 그대로, 들여쓰기 2칸, 파일 끝 줄바꿈
+    5. 파일 쓰기가 실패하면 짧게 재시도한다 (2026-09-28, Step 6) — Windows에서 백신·색인이 파일을 잠깐 잡는 경우.
+       무결성 위반(IntegrityError)은 쓰기 전에 검사하므로 재시도하지 않는다
 
 단독 실행:  uv run python src/data_store.py   (Step 1 완료 기준 자체 확인)
 """
@@ -16,6 +18,7 @@
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from integrity import check_integrity   # 같은 src/ 폴더의 모듈 → 폴더 이름 없이 불러온다 (실행 방식 A안)
@@ -28,6 +31,9 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 ORIGINAL_PATH = DATA_DIR / "initial_data.json"   # 원본 — 읽기만 한다
 WORKING_PATH = DATA_DIR / "bank_data.json"       # 작업용 복사본 — 여기만 고친다
 TEMP_PATH = DATA_DIR / "bank_data.json.tmp"      # atomic write용 임시 파일 (진짜 파일과 같은 폴더)
+
+SAVE_ATTEMPTS = 3                                # 파일 쓰기 시도 횟수 (처음 1번 + 재시도 2번)
+SAVE_RETRY_DELAY = 0.2                           # 재시도 사이 대기(초)
 
 
 # ── 에러 ─────────────────────────────────────────────────────────
@@ -68,6 +74,7 @@ def save(data: dict) -> None:
     [0] 무결성 검사 — 실패하면 IntegrityError (파일은 하나도 안 건드림)
     [1] 임시 파일에 끝까지 쓰고, 디스크에 확실히 기록
     [2] 임시 파일을 진짜 파일 이름으로 교체 — 실패하면 StorageError (진짜 파일은 옛날 그대로)
+    [1]·[2]가 실패하면 SAVE_ATTEMPTS번까지 다시 한다. 진짜 파일은 교체 전까지 그대로라 몇 번 해도 안전하다
     """
     # [0] 무결성 검사
     violations = check_integrity(data)
@@ -77,20 +84,26 @@ def save(data: dict) -> None:
     # 파일을 열기 "전에" 글자로 바꿔둔다 → 데이터에 버그가 있으면 여기서 터지고, 파일은 안 건드림
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
-    try:
-        # [1] 임시 파일에 쓰기
-        with open(TEMP_PATH, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()                                        # 파이썬이 들고 있던 내용을 운영체제에 넘김
-            os.fsync(f.fileno())                             # 운영체제에게 "지금 당장 디스크에 써라"
-        # [2] 이름 바꾸기 — 운영체제가 한 번에 처리 (옛 파일 아니면 새 파일, 반쪽은 없음)
-        os.replace(TEMP_PATH, WORKING_PATH)
-    except OSError as e:
+    for attempt in range(1, SAVE_ATTEMPTS + 1):
         try:
-            TEMP_PATH.unlink(missing_ok=True)                # 남은 임시 파일 정리 (없으면 그냥 넘어감)
-        except OSError:
-            pass                                             # 정리에 실패해도, 원래 에러를 알리는 게 더 중요하다
-        raise StorageError(f"저장하지 못했습니다: {WORKING_PATH.name} ({type(e).__name__})") from e
+            # [1] 임시 파일에 쓰기
+            with open(TEMP_PATH, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()                                    # 파이썬이 들고 있던 내용을 운영체제에 넘김
+                os.fsync(f.fileno())                         # 운영체제에게 "지금 당장 디스크에 써라"
+            # [2] 이름 바꾸기 — 운영체제가 한 번에 처리 (옛 파일 아니면 새 파일, 반쪽은 없음)
+            os.replace(TEMP_PATH, WORKING_PATH)
+            return
+        except OSError as e:
+            try:
+                TEMP_PATH.unlink(missing_ok=True)            # 남은 임시 파일 정리 (없으면 그냥 넘어감)
+            except OSError:
+                pass                                         # 정리에 실패해도, 원래 에러를 알리는 게 더 중요하다
+            if attempt == SAVE_ATTEMPTS:
+                raise StorageError(f"저장하지 못했습니다: {WORKING_PATH.name} ({type(e).__name__})") from e
+            logger.warning("저장 실패 %d/%d번째 (%s) — %.1f초 뒤 다시 시도합니다",
+                           attempt, SAVE_ATTEMPTS, type(e).__name__, SAVE_RETRY_DELAY)
+            time.sleep(SAVE_RETRY_DELAY)
 
 
 def ensure_working_copy() -> bool:
@@ -150,6 +163,38 @@ def _self_check() -> None:
     # 5. reset() 하면 원본 상태로 돌아간다
     reset()
     results.append(("reset() 하면 원본 상태로 돌아간다", load()["accounts"][0]["nickname"] == "생활비"))
+
+    # 8·9. 파일 교체가 잠깐 실패하면 재시도로 저장되고, 계속 실패하면 StorageError (Step 6)
+    real_replace, calls = os.replace, []
+
+    def flaky_replace(src, dst, fail_times):
+        calls.append(1)
+        if len(calls) <= fail_times:
+            raise PermissionError("잠긴 파일 흉내")
+        real_replace(src, dst)
+
+    data = load()
+    data["accounts"][0]["nickname"] = "재시도 확인"
+    os.replace = lambda s, d: flaky_replace(s, d, fail_times=1)
+    try:
+        save(data)
+    finally:
+        os.replace = real_replace
+    results.append(("교체가 1번 실패해도 재시도로 저장된다", load()["accounts"][0]["nickname"] == "재시도 확인"))
+
+    calls.clear()
+    before = WORKING_PATH.read_bytes()
+    os.replace = lambda s, d: flaky_replace(s, d, fail_times=SAVE_ATTEMPTS)
+    try:
+        save(load())
+        gave_up = False
+    except StorageError:
+        gave_up = True
+    finally:
+        os.replace = real_replace
+    results.append((f"{SAVE_ATTEMPTS}번 모두 실패하면 StorageError, 파일은 그대로",
+                    gave_up and len(calls) == SAVE_ATTEMPTS and WORKING_PATH.read_bytes() == before))
+    reset()
 
     # 6·7. 원본은 한 번도 바뀌지 않았고, 임시 파일도 남지 않았다
     results.append(("원본 파일은 변경되지 않았다", ORIGINAL_PATH.read_bytes() == original_before))
