@@ -120,6 +120,27 @@ def _next_id(items: list[dict], field: str, prefix: str) -> str:
     return f"{prefix}{max(numbers, default=0) + 1:03d}"
 
 
+def new_request(data: dict, intent: str, details: dict, status: str, reason: str | None,
+                requested_at: str, finished_at: datetime) -> dict:
+    """처리 기록 한 건을 만들어 data["requests"]에 붙이고 돌려준다 (저장은 부르는 쪽이).
+
+    승인 화면까지 간 요청만 기록한다 (Step 6 결정 2). 어느 업무든 같은 틀이고 details만 업무마다 다르다.
+    details에는 이름이 아니라 ID를 적는다 — 계좌 별명은 바뀔 수 있다 (결정 3)
+    """
+    request = {
+        "request_id": _next_id(data["requests"], "request_id", "req_"),
+        "owner_id": CURRENT_USER_ID,
+        "intent": intent,
+        "details": details,
+        "status": status,                                     # completed / cancelled / expired / failed
+        "reason": reason,
+        "requested_at": requested_at,
+        "finished_at": finished_at.isoformat(timespec="seconds"),
+    }
+    data["requests"].append(request)
+    return request
+
+
 class TransferInstantHandler:
     """즉시이체 — 내 계좌 사이에서 금액을 옮긴다. intent "transfer_instant"."""
 
@@ -148,16 +169,21 @@ class TransferInstantHandler:
             "balance_after": source["balance"] - amount,
         }, None
 
+    def details(self, plan: dict) -> dict:
+        """처리 기록(requests)에 남길 값 — ID와 금액만."""
+        return {"from_account_id": plan["from_account_id"], "to_account_id": plan["to_account_id"],
+                "amount": plan["amount"]}
+
     def describe(self, plan: dict) -> str:
         """승인 화면에 보여줄 문장 (정해진 틀, Step 5 결정 2). 숫자는 처리안의 값을 그대로 옮긴다."""
         return (f"{plan['from_name']} → {plan['to_name']}, {plan['amount']:,}원을 즉시이체할게요.\n"
                 f"이체 후 {plan['from_name']} 잔액은 {plan['balance_after']:,}원이에요.")
 
-    def apply(self, plan: dict, data: dict, now: datetime) -> str:
+    def apply(self, plan: dict, data: dict, now: datetime) -> tuple[str, dict]:
         """data를 실제로 바꾼다 (저장은 하지 않는다 — 부르는 쪽이 data_store.save).
 
         잔액 두 곳 + 거래 두 줄을 함께 바꾼다. 두 줄은 같은 transfer_id로 묶인다 (무결성 규칙 9).
-        돌려주는 값: 완료 안내 문장
+        돌려주는 값: (완료 안내 문장, 처리 기록에 더할 값 {"transfer_id": ...})
         """
         accounts = {acc["account_id"]: acc for acc in data["accounts"]}
         accounts[plan["from_account_id"]]["balance"] -= plan["amount"]
@@ -175,8 +201,9 @@ class TransferInstantHandler:
 
         balance = accounts[plan["from_account_id"]]["balance"]
         to_name = plan["to_name"]
-        return (f"{plan['from_name']}에서 {to_name}{josa(to_name, '으로/로')} {plan['amount']:,}원을 보냈어요.\n"
-                f"{plan['from_name']} 잔액은 {balance:,}원이에요.")
+        message = (f"{plan['from_name']}에서 {to_name}{josa(to_name, '으로/로')} {plan['amount']:,}원을 보냈어요.\n"
+                   f"{plan['from_name']} 잔액은 {balance:,}원이에요.")
+        return message, {"transfer_id": transfer_id}
 
 
 # 변경 업무 표 — intent 이름 → Handler. graph.py는 여기서 찾아 쓰기만 한다
@@ -243,12 +270,21 @@ def _self_check() -> None:
         {"from_account": "비상금", "to_account": "저축", "amount": 100000}, data)[1] or "")))
 
     after = copy.deepcopy(data)
-    handler.apply(plan, after, datetime.now(KST))
+    now = datetime.now(KST)
+    _, refs = handler.apply(plan, after, now)
+    new_request(after, "transfer_instant", {**handler.details(plan), **refs}, "completed", None, now.isoformat(), now)
     balances = {a["nickname"]: a["balance"] for a in _my_accounts(after)}
     results.append(("apply 후 생활비 420,000 / 저축 1,950,000", balances["생활비"] == 420000 and balances["저축"] == 1950000))
     new_txs = after["transactions"][-2:]
     results.append(("거래 2줄이 같은 transfer_id", new_txs[0]["transfer_id"] == new_txs[1]["transfer_id"] == "tr_001"))
-    results.append(("apply 후 무결성 9개 규칙 통과", not any(check_integrity(after).values())))
+    results.append(("apply + 완료 기록 후 무결성 10개 규칙 통과", not any(check_integrity(after).values())))
+    results.append(("완료 기록에 ID·금액·transfer_id, 번호 req_001",
+                    after["requests"][0]["request_id"] == "req_001"
+                    and after["requests"][0]["details"] == {"from_account_id": "acc_001", "to_account_id": "acc_002",
+                                                            "amount": 100000, "transfer_id": "tr_001"}))
+    no_record = copy.deepcopy(after)
+    no_record["requests"].clear()                             # 이체만 저장하고 기록을 빠뜨린 버그를 흉내
+    results.append(("완료 기록이 빠지면 규칙 10이 잡음", bool(check_integrity(no_record)["transfer_recorded"])))
 
     broken = copy.deepcopy(after)
     broken["transactions"].pop()                              # 입금 줄을 빠뜨린 버그를 흉내

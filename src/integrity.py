@@ -35,7 +35,10 @@ RULES = {
     "no_future":       "7. 기준 시각보다 미래의 거래 없음",
     "names_unique":    "8. 같은 소유자의 계좌 별명·카드 이름은 겹치지 않음",
     "transfer_pairs":  "9. 같은 transfer_id의 거래는 출금 1 + 입금 1, 금액·시각이 같고 계좌가 다름",
+    "transfer_recorded": "10. 모든 이체(transfer_id)에 완료 기록이 있고, 완료 기록의 transfer_id는 실제 거래에 있음",
 }
+
+REQUEST_STATUSES = {"completed", "cancelled", "expired", "failed"}   # requests.status 허용값 (설계서 5장)
 
 # 규칙 8의 검사 대상: (최상위 키, 그 안에서 이름 역할을 하는 필드)
 # LLM은 이름으로 고르고 저장은 ID로 하므로, 한 사람 안에서 이름 → ID가 정확히 1:1이어야 한다
@@ -51,6 +54,7 @@ ID_FIELDS = [
     ("transactions", "transaction_id"),
     ("addresses", "address_id"),
     ("bills", "bill_id"),
+    ("requests", "request_id"),
 ]
 
 
@@ -153,6 +157,20 @@ def check_integrity(data: dict, now: datetime | None = None) -> dict[str, list[s
             errors["transfer_pairs"].append(
                 f"{transfer_id}: " + ", ".join(f"{t['transaction_id']}({t['type']} {t['amount']!r})" for t in txs)
             )
+
+    # ── 규칙 6: 처리 기록의 상태 값 ──────────────────────────
+    for req in data["requests"]:
+        if req["status"] not in REQUEST_STATUSES:
+            errors["values_valid"].append(f"{req['request_id']} 상태가 {req['status']!r}")
+
+    # ── 규칙 10: 이체와 완료 기록의 짝 ────────────────────────
+    # 이체는 거래와 기록을 한 번의 save로 함께 남긴다 (Step 6 결정 4). 한쪽만 있으면 코드가 무언가를 빠뜨린 것
+    recorded = {req["details"].get("transfer_id") for req in data["requests"] if req["status"] == "completed"}
+    recorded.discard(None)
+    for transfer_id in sorted(pairs.keys() - recorded):
+        errors["transfer_recorded"].append(f"{transfer_id}: 거래는 있는데 완료 기록이 없음")
+    for transfer_id in sorted(recorded - pairs.keys()):
+        errors["transfer_recorded"].append(f"{transfer_id}: 완료 기록은 있는데 거래가 없음")
 
     # ── 규칙 1: 따라가서 계산한 잔액이 저장된 잔액과 같은가 ───
     for acc_id, account in accounts.items():
