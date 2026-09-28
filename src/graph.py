@@ -29,7 +29,6 @@ from intents import INTENTS, NOT_UNDERSTOOD, READ_INTENTS, UNCERTAIN, UNSUPPORTE
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-3.5-flash-lite"
-MAX_HISTORY = 10          # understand에 넘길 최근 메시지 수 (대화가 길어져도 토큰이 계속 늘지 않게)
 
 
 # ── State ────────────────────────────────────────────────────────
@@ -37,8 +36,9 @@ class AgentState(TypedDict, total=False):
     """노드들이 주고받는 데이터. 지금 경로에서 쓰는 칸만 둔다 (승인 관련 칸은 Step 5, 8에서 추가).
 
     messages  대화 내내 쌓인다 (add_messages: 같은 메시지가 다시 오면 중복으로 쌓지 않고 교체)
-    intent    한 턴짜리. understand가 매번 새로 쓴다
-    params    한 턴짜리. understand가 매번 통째로 새로 쓴다 (이전 턴의 값과 합치지 않는다)
+              기록용. LLM에게는 마지막 메시지 하나만 넘긴다 (맥락은 아래 intent·params로)
+    intent    턴을 넘어 이어진다. understand가 직전 값을 LLM에게 보여주고, 이번 턴의 최종 값을 쓴다
+    params    턴을 넘어 이어진다. 유지할지·바꿀지는 LLM이 이번 말의 뜻으로 판단한다 (코드가 합치지 않는다)
     inferred  한 턴짜리. LLM이 뜻으로 추측해서 고른 이름들 (사용자 말에 글자로는 없는 것).
               understand가 쓰고 respond가 읽어서 "'여행 자금' 계좌로 이해했어요"처럼 해석을 밝힌다
     result    한 턴짜리. understand가 비우고 read_task가 쓴다
@@ -67,14 +67,54 @@ SYSTEM_PROMPT = """너는 은행 앱의 요청 해석기다. 사용자의 가장
 {card_names}
 </사용자의 카드 이름>
 
+<이전 상태>
+{previous}
+</이전 상태>
+
 <규칙>
-1. 사용자가 말하지 않은 칸은 비워둔다. 절대 추측해서 채우지 않는다.
+1. 사용자가 말하지 않은 칸은 비워둔다. 절대 추측해서 채우지 않는다. (아래 7·8번으로 이어받는 경우만 예외)
 2. 계좌·카드는 위 목록의 이름 중에서만 고른다. 뜻으로 말해도("여행 갈 때 쓰는 통장") 알맞은 이름을 고른다.
 3. 계좌·카드를 말했지만 목록 중 어느 것인지 확신할 수 없으면 {uncertain}을 고른다.
+   목록에 없는 종류의 계좌("주식 계좌")라도 계좌에 대한 업무를 원하면 {unsupported}가 아니라 그 업무 + {uncertain}이다.
 4. 한 문장에 계좌가 여럿이면 역할을 나눈다. "~에서"는 출금 계좌, "~으로"·"~에"는 입금 계좌.
 5. 금액은 원 단위 정수로 바꾼다 ("10만 원" → 100000). 음수여도 바꾸지 말고 그대로 옮긴다.
-6. 이전 대화는 참고만 하고, 가장 최근 사용자 메시지를 해석한다.
+6. 이전 상태를 보고 "이번 턴의 최종 값"을 통째로 채운다.
+7. 같은 업무를 이어가면 이전 값은 유지하고, 이번 말에서 바꾼 칸만 고친다.
+   "저축은?"은 대상을 바꾸고, "저축도"는 더하고, "전부"는 계좌 목록을 비운다(= 전체).
+8. 다른 업무로 바뀌면 이전 상태의 "이어받을 계좌"만 이번 말이 비워 둔 계좌 칸에 옮긴다.
+   ("이어받을 계좌: 생활비"일 때 "저축으로 3만 원" → 출금 계좌 = 생활비)
+   "이어받을 계좌: 없음"이면 가리키는 말("거기서", "그 계좌")이 있어도 옮기지 않고 비워 둔다.
+9. "두 번째 거"처럼 순서로 고르면 이전 상태의 "보여준 후보" 순서를 따른다.
 </규칙>"""
+
+
+def _carry_account(params: dict) -> str | None:
+    """다른 업무로 넘어갈 때 이어받을 계좌 하나를 정한다 (규칙 8). 없거나 여럿이면 None.
+
+    개수 세기는 사실이므로 LLM이 아니라 코드가 한다 — 2026-09-28 LLM이 두 계좌를 "하나뿐"으로 잘못 셈.
+    params 예) {"accounts": ["생활비"]}                                  → "생활비"
+               {"accounts": ["생활비", "저축"]}                          → None
+               {"from_account": "생활비", "to_account": "저축", ...}     → None (두 개 → 되묻기)
+    """
+    names = {name for slot, name in _names_in(params)
+             if slot != "card" and name != UNCERTAIN}               # 카드는 계좌가 아니다
+    return names.pop() if len(names) == 1 else None
+
+
+def _describe_previous(state: AgentState) -> str:
+    """직전 턴의 해석 결과를 LLM에게 줄 한 줄로 만든다 (대화 기록 대신 — 설계변경기록 참고).
+
+    understand가 이번 턴 값을 쓰기 "전에" 부르므로, State에는 아직 직전 턴의 값이 남아 있다.
+    """
+    intent = state.get("intent")
+    if intent is None:
+        return "없음 (첫 요청)"
+    params = state.get("params") or {}
+    lines = [f"업무: {intent}", f"값: {params}", f"이어받을 계좌: {_carry_account(params) or '없음'}"]
+    candidates = (state.get("result") or {}).get("candidates")
+    if candidates:
+        lines.append(f"보여준 후보(순서대로): {candidates}")
+    return "\n".join(lines)
 
 
 # 계좌·카드 이름이 들어가는 slot → 해석을 밝힐 때 이름 뒤에 붙일 말
@@ -82,22 +122,28 @@ SYSTEM_PROMPT = """너는 은행 앱의 요청 해석기다. 사용자의 가장
 NAME_SLOTS = {"accounts": "계좌", "from_account": "계좌", "to_account": "계좌", "card": ""}
 
 
-def _find_inferred(params: dict, utterance: str) -> list[dict]:
-    """LLM이 고른 이름 중, 사용자 말에 글자로는 없는 것을 찾는다 = 뜻으로 추측한 것.
-
-    띄어쓰기는 무시하고 비교한다 ("여행자금"이라고 말했으면 "여행 자금"은 추측이 아님).
-    이 확인은 막기 위한 것이 아니라 "어떻게 이해했는지 알려주기" 위한 것이다.
-    """
-    said = utterance.replace(" ", "")
-    inferred = []
+def _names_in(params: dict) -> list[tuple[str, str]]:
+    """params 안의 계좌·카드 이름을 (slot, 이름) 목록으로 펼친다."""
+    pairs = []
     for slot in NAME_SLOTS:
         value = params.get(slot)
         if value is None:
             continue
-        for name in value if isinstance(value, list) else [value]:
-            if name != UNCERTAIN and name.replace(" ", "") not in said:
-                inferred.append({"slot": slot, "name": name})
-    return inferred
+        pairs.extend((slot, name) for name in (value if isinstance(value, list) else [value]))
+    return pairs
+
+
+def _find_inferred(params: dict, utterance: str, previous_params: dict) -> list[dict]:
+    """LLM이 고른 이름 중, 사용자 말에 글자로 없고 이전 상태에도 없던 것을 찾는다 = 뜻으로 추측한 것.
+
+    띄어쓰기는 무시하고 비교한다 ("여행자금"이라고 말했으면 "여행 자금"은 추측이 아님).
+    이전 상태에서 이어받은 이름은 추측이 아니다 (이미 앞 턴에서 확인된 이름).
+    이 확인은 막기 위한 것이 아니라 "어떻게 이해했는지 알려주기" 위한 것이다.
+    """
+    said = utterance.replace(" ", "")
+    known = {name for _, name in _names_in(previous_params)}
+    return [{"slot": slot, "name": name} for slot, name in _names_in(params)
+            if name != UNCERTAIN and name not in known and name.replace(" ", "") not in said]
 
 
 @lru_cache(maxsize=1)
@@ -124,15 +170,17 @@ def _build_schema(account_names: list[str], card_names: list[str]):
     return create_model(
         "Understanding",
         intent=(IntentName, Field(description="사용자가 원하는 업무")),
+        # 모든 칸은 "이번 턴의 최종 값"이다 — 이전 상태에서 유지한 값도 다시 적는다 (규칙 6~8)
         accounts=(list[AccountName], Field(default_factory=list,
-                  description="조회할 계좌 이름들. 계좌를 말하지 않았으면 빈 목록")),
+                  description="이번 턴의 최종 조회 대상. 이전 대상을 유지하면 다시 적는다. 전체면 빈 목록")),
         from_account=(AccountName | None, Field(default=None,
-                      description="이체의 출금 계좌('~에서'). 말하지 않았으면 비움")),
+                      description="이체의 출금 계좌('~에서'). 이전 상태에도, 이번 말에도 없으면 비움")),
         to_account=(AccountName | None, Field(default=None,
-                    description="이체의 입금 계좌('~으로'). 말하지 않았으면 비움")),
+                    description="이체의 입금 계좌('~으로'). 이전 상태에도, 이번 말에도 없으면 비움")),
         amount=(int | None, Field(default=None,
-                description="금액. 원 단위 정수('10만 원'은 100000). 음수도 그대로. 말하지 않았으면 비움")),
-        card=(CardName | None, Field(default=None, description="대상 카드 이름. 말하지 않았으면 비움")),
+                description="금액. 원 단위 정수('10만 원'은 100000). 음수도 그대로. 이전 상태에도, 이번 말에도 없으면 비움")),
+        card=(CardName | None, Field(default=None,
+              description="대상 카드 이름. 이전 상태에도, 이번 말에도 없으면 비움")),
         reason=(str, Field(description="판단 근거 한 문장")),
     )
 
@@ -150,14 +198,16 @@ def understand(state: AgentState) -> dict:
         uncertain=UNCERTAIN,
         account_names=", ".join(account_names),
         card_names=", ".join(card_names),
+        previous=_describe_previous(state),
     )
     llm = _get_llm().with_structured_output(schema)            # 키가 없으면 여기서 멈춘다 (try 밖에 둔 이유)
-    history = state["messages"][-MAX_HISTORY:]
+    utterance = state["messages"][-1]                           # 대화 기록 대신 지금 말 하나만 (맥락은 <이전 상태>로)
+    previous_params = state.get("params") or {}
 
     try:
         # 외부(API) 경계만 감싼다 — 네트워크 오류, 형식 위반 같은 LLM 쪽 실패.
         # 우리 코드의 버그까지 감싸지 않도록 LLM 호출 한 줄만 try 안에 둔다.
-        parsed = llm.invoke([SystemMessage(content=system), *history])
+        parsed = llm.invoke([SystemMessage(content=system), utterance])
     except Exception:
         logger.exception("understand: LLM 호출 또는 형식 검증에 실패했습니다")   # 오류와 traceback을 함께 기록 (29번)
         return {"intent": NOT_UNDERSTOOD, "params": {}, "inferred": [], "result": None}
@@ -175,7 +225,7 @@ def understand(state: AgentState) -> dict:
             continue                                            # 비어 있는 칸은 넣지 않음 (말하지 않은 것)
         params[name] = list(dict.fromkeys(value)) if isinstance(value, list) else value   # 목록은 중복 제거
 
-    inferred = _find_inferred(params, state["messages"][-1].content)   # 마지막 메시지 = 지금 해석한 사용자 말
+    inferred = _find_inferred(params, utterance.content, previous_params)
     logger.info("understand: intent=%s params=%s inferred=%s reason=%s",
                 parsed.intent, params, [i["name"] for i in inferred], parsed.reason)
     return {"intent": parsed.intent, "params": params, "inferred": inferred,
@@ -254,7 +304,7 @@ def build_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-# ── 단독 실행: Step 3 완료 기준 확인 (Gemini API 호출 7회) ────────
+# ── 단독 실행: Step 3·4 완료 기준 확인 (Gemini API 호출 19회) ─────
 def _self_check() -> None:
     """구현계획 Step 3의 완료 기준을 확인한다.
 
@@ -277,13 +327,46 @@ def _self_check() -> None:
     def record(question: str, state: dict, answer: str, passed: bool):
         results.append((f"{question} -> {' / '.join(answer.splitlines()[:2])}", passed))
 
-    # ① 이어 묻기 확인 — 한 대화 안에서. 앞 질문의 accounts가 다음 질문에 남으면 실패
-    first, second = "생활비랑 저축 잔액 보여줘", "내 계좌 전부 보여줘"
-    state, answer = ask(first, "continuity")
-    record(first, state, answer,
-           set(state.get("params", {}).get("accounts", [])) == {"생활비", "저축"} and "비상금" not in answer)
-    state, answer = ask(second, "continuity")
-    record(second, state, answer, all(name in answer for name in ["생활비", "저축", "여행 자금", "비상금"]))
+    # ① 이어 묻기 확인 — 한 대화 안에서. 이전 상태를 유지·추가·변경·전체로 바꾸는지 (Step 4, B안)
+    def accounts_of(state):
+        return set(state.get("params", {}).get("accounts", []))
+
+    continuity = [
+        ("생활비랑 저축 잔액 보여줘", lambda s, a: accounts_of(s) == {"생활비", "저축"}),
+        ("여행 자금도",             lambda s, a: accounts_of(s) == {"생활비", "저축", "여행 자금"}),   # 추가
+        ("비상금은?",               lambda s, a: accounts_of(s) == {"비상금"}),                    # 대상 변경
+        ("잔액 다시 알려줘",         lambda s, a: accounts_of(s) == {"비상금"}),                    # 말 안 함 = 유지 (전체 아님)
+        ("내 계좌 전부 보여줘",      lambda s, a: all(n in a for n in ["생활비", "저축", "여행 자금", "비상금"])),
+    ]
+    for question, check in continuity:
+        state, answer = ask(question, "continuity")
+        record(question, state, answer, check(state, answer))
+
+    # ② 업무가 바뀔 때 — 직전 계좌가 하나면 이어받고, 여럿이면 비운다 (Step 4 결정 1-2)
+    state, answer = ask("생활비 잔액 얼마야?", "switch-pointed")
+    state, answer = ask("거기서 저축으로 3만 원 보내줘", "switch-pointed")
+    record("(생활비 조회 후) 거기서 저축으로 3만 원", state, answer,
+           state.get("params") == {"from_account": "생활비", "to_account": "저축", "amount": 30000})
+    state, answer = ask("아니 5만 원", "switch-pointed")                                       # 같은 업무 → 금액만
+    record("아니 5만 원", state, answer,
+           state.get("params") == {"from_account": "생활비", "to_account": "저축", "amount": 50000})
+
+    state, answer = ask("생활비 잔액 얼마야?", "switch-silent")
+    state, answer = ask("저축으로 3만 원 보내줘", "switch-silent")
+    record("(생활비 조회 후) 저축으로 3만 원 -> 출금 = 생활비", state, answer,
+           state.get("params", {}).get("from_account") == "생활비")
+
+    state, answer = ask("생활비랑 저축 잔액 보여줘", "switch-many")
+    state, answer = ask("여행 자금으로 3만 원 보내줘", "switch-many")
+    record("(두 계좌 조회 후) 여행 자금으로 3만 원 -> 출금 비움", state, answer,
+           "from_account" not in state.get("params", {}))
+
+    # ③ 보여준 후보를 순서로 고르기
+    state, answer = ask("주식 계좌 잔액 알려줘", "candidates")
+    candidates = (state.get("result") or {}).get("candidates", [])
+    state, answer = ask("두 번째 거", "candidates")
+    record("(후보를 본 뒤) 두 번째 거", state, answer,
+           len(candidates) > 1 and accounts_of(state) == {candidates[1]})
 
     # ② 개별 질문 확인 — 질문마다 새 대화. 앞 질문의 영향을 받지 않게
     cases = [
