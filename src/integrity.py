@@ -34,6 +34,7 @@ RULES = {
     "values_valid":    "6. 금액은 0보다 큰 정수, 거래 유형은 deposit/withdrawal",
     "no_future":       "7. 기준 시각보다 미래의 거래 없음",
     "names_unique":    "8. 같은 소유자의 계좌 별명·카드 이름은 겹치지 않음",
+    "transfer_pairs":  "9. 같은 transfer_id의 거래는 출금 1 + 입금 1, 금액·시각이 같고 계좌가 다름",
 }
 
 # 규칙 8의 검사 대상: (최상위 키, 그 안에서 이름 역할을 하는 필드)
@@ -135,6 +136,23 @@ def check_integrity(data: dict, now: datetime | None = None) -> dict[str, list[s
         running[acc_id] += amount if tx_type == "deposit" else -amount
         if running[acc_id] < 0:                                  # 규칙 2
             errors["never_negative"].append(f"{tx_id} 직후 {acc_id} 잔액 {running[acc_id]:,}원")
+
+    # ── 규칙 9: 이체 짝 ──────────────────────────────────────
+    # 내 계좌 사이 이체는 출금 1줄 + 입금 1줄이 같은 transfer_id로 묶인다 (2026-09-28, 설계변경기록 B16)
+    # 한쪽만 적힌 이체(입금을 빠뜨린 버그)를 저장 전에 막는다
+    pairs = defaultdict(list)
+    for tx in data["transactions"]:
+        if tx["transfer_id"] is not None:
+            pairs[tx["transfer_id"]].append(tx)
+    for transfer_id, txs in sorted(pairs.items()):
+        types = sorted(tx["type"] for tx in txs)
+        if (types != ["deposit", "withdrawal"]
+                or txs[0]["amount"] != txs[1]["amount"]
+                or txs[0]["occurred_at"] != txs[1]["occurred_at"]
+                or txs[0]["account_id"] == txs[1]["account_id"]):
+            errors["transfer_pairs"].append(
+                f"{transfer_id}: " + ", ".join(f"{t['transaction_id']}({t['type']} {t['amount']!r})" for t in txs)
+            )
 
     # ── 규칙 1: 따라가서 계산한 잔액이 저장된 잔액과 같은가 ───
     for acc_id, account in accounts.items():
