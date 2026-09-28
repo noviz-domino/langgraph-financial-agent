@@ -42,6 +42,13 @@ def my_card_names(data: dict) -> list[str]:
     return [card["name"] for card in _my_cards(data)]
 
 
+# 종류별 이름 목록 — intents.SLOTS의 kind로 찾는다. graph.py는 종류를 몰라도 후보를 보여줄 수 있다 (Step 7)
+NAME_LISTS = {
+    "account": my_account_names,
+    "card": my_card_names,
+}
+
+
 def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> list[dict]:
     """계좌 목록과 잔액을 조회한다.
 
@@ -206,10 +213,41 @@ class TransferInstantHandler:
         return message, {"transfer_id": transfer_id}
 
 
+class CardLockTemporaryHandler:
+    """카드 일시 잠금 — 카드 상태를 active → locked로. intent "card_lock_temporary".
+
+    계좌가 아닌 다른 데이터(cards)를 바꾸는 업무. 이 Handler를 추가하면서 graph.py를 고치지 않는지가
+    Step 7의 검증 대상이다 (기획서 성공 기준 5).
+    """
+
+    def validate(self, params: dict, data: dict) -> tuple[dict | None, str | None]:
+        """잠글 수 있는 카드인지 검사한다. 이미 잠겼거나 분실 정지된 카드는 거절 (Step 7 결정 1)."""
+        card = {c["name"]: c for c in _my_cards(data)}[params["card"]]   # 허용 목록 밖이면 KeyError (버그)
+        name = card["name"]
+        if card["status"] == "locked":
+            return None, f"{name}{josa(name, '은/는')} 이미 잠겨 있어요."
+        if card["status"] == "reported_lost":
+            return None, f"분실 정지된 카드는 잠글 수 없어요. {name} 재발급을 신청해 주세요."
+        return {"card_id": card["card_id"], "card_name": name}, None
+
+    def details(self, plan: dict) -> dict:
+        return {"card_id": plan["card_id"]}
+
+    def describe(self, plan: dict) -> str:
+        name = plan["card_name"]
+        return (f"{name}{josa(name, '을/를')} 일시 잠금할게요.\n"
+                "잠그면 결제가 막히고, 분실 정지와 달리 나중에 풀 수 있어요.")
+
+    def apply(self, plan: dict, data: dict, now: datetime) -> tuple[str, dict]:
+        next(c for c in data["cards"] if c["card_id"] == plan["card_id"])["status"] = "locked"
+        name = plan["card_name"]
+        return f"{name}{josa(name, '을/를')} 잠갔어요.", {}
+
+
 # 변경 업무 표 — intent 이름 → Handler. graph.py는 여기서 찾아 쓰기만 한다
-# TODO(Step 7): "card_lock_temporary": CardLockTemporaryHandler()
 HANDLERS = {
     "transfer_instant": TransferInstantHandler(),
+    "card_lock_temporary": CardLockTemporaryHandler(),
 }
 
 
@@ -291,7 +329,22 @@ def _self_check() -> None:
     broken["accounts"][1]["balance"] -= 100000                # 잔액까지 맞춰도
     results.append(("입금 줄이 빠지면 규칙 9가 잡음", bool(check_integrity(broken)["transfer_pairs"])))
 
-    results.append(("HANDLERS 키는 WRITE_INTENTS 안에", set(HANDLERS) <= WRITE_INTENTS))
+    # Step 7에서 추가한 것 — 카드 일시 잠금 Handler
+    card = HANDLERS["card_lock_temporary"]
+    card_plan, reason = card.validate({"card": "생활비 카드"}, data)
+    results.append(("카드 잠금 검사 통과 -> 내 생활비 카드(card_001)", reason is None and card_plan["card_id"] == "card_001"))
+    locked = copy.deepcopy(data)
+    message, refs = card.apply(card_plan, locked, datetime.now(KST))
+    results.append(("apply 후 status = locked, 안내 문장", locked["cards"][0]["status"] == "locked"
+                    and message == "생활비 카드를 잠갔어요." and refs == {}))
+    results.append(("이미 잠긴 카드 -> 거절 사유", card.validate({"card": "생활비 카드"}, locked)[1] == "생활비 카드는 이미 잠겨 있어요."))
+    locked["cards"][0]["status"] = "reported_lost"
+    results.append(("분실 정지 카드 -> 거절 사유", "분실 정지" in (card.validate({"card": "생활비 카드"}, locked)[1] or "")))
+    locked["cards"][0]["status"] = "lock"                     # 잘못된 상태 값을 쓰는 버그를 흉내
+    results.append(("잘못된 카드 상태는 무결성 규칙 6이 잡음", bool(check_integrity(locked)["values_valid"])))
+    results.append(("NAME_LISTS: 카드 후보는 내 카드 3개", NAME_LISTS["card"](data) == ["생활비 카드", "저축 카드", "여행 카드"]))
+
+    results.append(("HANDLERS 키 = WRITE_INTENTS (변경 업무 모두 Handler 있음)", set(HANDLERS) == WRITE_INTENTS))
     results.append(("조회·검사가 원래 데이터를 바꾸지 않음", data == before))
 
     for description, passed in results:

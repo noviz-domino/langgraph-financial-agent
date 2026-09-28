@@ -39,6 +39,7 @@ RULES = {
 }
 
 REQUEST_STATUSES = {"completed", "cancelled", "expired", "failed"}   # requests.status 허용값 (설계서 5장)
+CARD_STATUSES = {"active", "locked", "reported_lost"}                # cards.status 허용값 (설계서 5장)
 
 # 규칙 8의 검사 대상: (최상위 키, 그 안에서 이름 역할을 하는 필드)
 # LLM은 이름으로 고르고 저장은 ID로 하므로, 한 사람 안에서 이름 → ID가 정확히 1:1이어야 한다
@@ -157,6 +158,11 @@ def check_integrity(data: dict, now: datetime | None = None) -> dict[str, list[s
             errors["transfer_pairs"].append(
                 f"{transfer_id}: " + ", ".join(f"{t['transaction_id']}({t['type']} {t['amount']!r})" for t in txs)
             )
+
+    # ── 규칙 6: 카드 상태 값 (Step 7) ─────────────────────────
+    for card in data["cards"]:
+        if card["status"] not in CARD_STATUSES:
+            errors["values_valid"].append(f"{card['card_id']} 상태가 {card['status']!r}")
 
     # ── 규칙 6: 처리 기록의 상태 값 ──────────────────────────
     for req in data["requests"]:

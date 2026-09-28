@@ -10,7 +10,7 @@
 LLM을 부르는 곳은 understand 한 군데뿐이다.
 사람의 말이 들어오는 입구에서만 LLM이 번역하고, 안쪽은 전부 코드로 처리한다.
 
-단독 실행:  uv run python src/graph.py   (Step 3~6 완료 기준 확인 — Gemini API를 실제로 호출함)
+단독 실행:  uv run python src/graph.py   (Step 3~7 완료 기준 확인 — Gemini API를 실제로 호출함)
 """
 
 import logging
@@ -29,9 +29,10 @@ from pydantic import Field, create_model
 import data_store
 from data_store import DataStoreError
 from config import load_env
-from functions import HANDLERS, READ_TASKS, josa, my_account_names, my_card_names, new_request
+from functions import HANDLERS, NAME_LISTS, READ_TASKS, josa, my_account_names, my_card_names, new_request
 from integrity import KST
-from intents import INTENTS, NOT_UNDERSTOOD, READ_INTENTS, UNCERTAIN, UNSUPPORTED, WRITE_INTENTS
+from intents import (INTENTS, KIND_LABELS, NAME_SLOTS, NOT_UNDERSTOOD, READ_INTENTS, SLOTS, UNCERTAIN, UNSUPPORTED,
+                     WRITE_INTENTS)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def _carry_account(params: dict) -> str | None:
                {"from_account": "생활비", "to_account": "저축", ...}     → None (두 개 → 되묻기)
     """
     names = {name for slot, name in _names_in(params)
-             if slot != "card" and name != UNCERTAIN}               # 카드는 계좌가 아니다
+             if SLOTS[slot]["kind"] == "account" and name != UNCERTAIN}   # 카드는 계좌가 아니다
     return names.pop() if len(names) == 1 else None
 
 
@@ -139,11 +140,6 @@ def _describe_previous(state: AgentState) -> str:
     if candidates:
         lines.append(f"보여준 후보(순서대로): {candidates}")
     return "\n".join(lines)
-
-
-# 계좌·카드 이름이 들어가는 slot → 해석을 밝힐 때 이름 뒤에 붙일 말
-# (카드 이름은 이미 "생활비 카드"처럼 끝에 "카드"가 붙어 있어서 빈칸)
-NAME_SLOTS = {"accounts": "계좌", "from_account": "계좌", "to_account": "계좌", "card": ""}
 
 
 def _names_in(params: dict) -> list[tuple[str, str]]:
@@ -176,19 +172,17 @@ def _find_inferred(params: dict, utterance: str, previous_params: dict) -> list[
     return found
 
 
-SLOT_ROLES = {"accounts": "조회 계좌", "from_account": "출금 계좌", "to_account": "입금 계좌", "card": "카드"}
-
 
 def _interpretation_notes(inferred: list[dict]) -> str:
     """해석 안내 문장. 추측·이어받음이 없으면 빈 문자열 (필요할 때만 보여준다 — 승인 피로 대비)."""
     lines = []
     guessed = [i for i in inferred if i["how"] == "guessed"]
     if guessed:
-        phrases = ", ".join(f"'{i['name']}' {NAME_SLOTS[i['slot']]}".strip() for i in guessed)
+        phrases = ", ".join(f"'{i['name']}' {SLOTS[i['slot']]['suffix']}".strip() for i in guessed)
         lines.append(f"{phrases}{josa(phrases, '으로/로')} 이해했어요.")
     for i in inferred:
         if i["how"] == "carried":
-            role, name = SLOT_ROLES[i["slot"]], i["name"]
+            role, name = SLOTS[i["slot"]]["role"], i["name"]
             lines.append(f"{role}{josa(role, '은/는')} 방금 보신 '{name}'{josa(name, '으로/로')} 했어요.")
     return "\n".join(lines)
 
@@ -301,8 +295,10 @@ def _form_problem(intent: str, params: dict, data: dict) -> dict | None:
 
     어느 업무든 똑같은 검사라 Handler가 아니라 그래프가 한다. Step 8에서 되묻기(ask_more)로 바뀐다.
     """
-    if any(value == UNCERTAIN or (isinstance(value, list) and UNCERTAIN in value) for value in params.values()):
-        return {"ok": False, "notice": "uncertain", "candidates": my_account_names(data)}
+    for slot, value in params.items():
+        if value == UNCERTAIN or (isinstance(value, list) and UNCERTAIN in value):
+            kind = SLOTS[slot]["kind"]                          # 계좌 칸이면 계좌 후보, 카드 칸이면 카드 후보 (Step 7)
+            return {"ok": False, "notice": "uncertain", "kind": kind, "candidates": NAME_LISTS[kind](data)}
     missing = [slot for slot in INTENTS[intent]["required"] if slot not in params]
     if missing:
         return {"ok": False, "notice": "missing", "slots": missing}
@@ -468,9 +464,10 @@ def respond(state: AgentState) -> dict:
         minutes = int(APPROVAL_TTL.total_seconds() // 60)
         text = f"승인 시간({minutes}분)이 지나 안전을 위해 실행하지 않았어요. 다시 요청해 주세요."
     elif result.get("notice") == "uncertain":
-        text = "말씀하신 계좌를 찾지 못했어요. 이 중에서 골라 다시 말씀해 주세요: " + ", ".join(result["candidates"])
+        label = KIND_LABELS[result["kind"]]
+        text = f"말씀하신 {label}{josa(label, '을/를')} 찾지 못했어요. 이 중에서 골라 다시 말씀해 주세요: " + ", ".join(result["candidates"])
     elif result.get("notice") == "missing":
-        needed = ", ".join(SLOT_ROLES.get(s, "금액") for s in result["slots"])
+        needed = ", ".join(SLOTS[s]["role"] for s in result["slots"])
         text = f"{needed}{josa(needed, '을/를')} 알려 주세요."
     elif result.get("notice") == "rejected":
         text = result["reason"]
@@ -513,9 +510,9 @@ def build_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
-# ── 단독 실행: Step 3~6 완료 기준 확인 (Gemini API 호출 28회) ─────
+# ── 단독 실행: Step 3~7 완료 기준 확인 (Gemini API 호출 31회) ─────
 def _self_check() -> None:
-    """구현계획 Step 3~6의 완료 기준을 확인한다.
+    """구현계획 Step 3~7의 완료 기준을 확인한다.
 
     이어 묻기 확인은 한 대화로, 나머지는 질문마다 새 대화로 나눈다.
     (한 대화로 모두 물으면 앞 질문이 뒤 질문의 해석에 영향을 줄 수 있어서, 무엇을 확인하는지 흐려진다)
@@ -702,6 +699,25 @@ def _self_check() -> None:
     record("저장 실패(3번 모두) -> 이체 안 됨, 실패 기록", state, answer,
            "저장하지 못해" in answer and balance("생활비") == before_balance
            and last["status"] == "failed" and "저장하지 못해" in last["reason"])
+    # ⑥ Step 7 — 카드 일시 잠금. graph.py에 카드 전용 코드 없이 HANDLERS 한 줄로 동작하는지
+    def card_status(name: str) -> str:
+        return next(c["status"] for c in data_store.load()["cards"] if c["owner_id"] == "user_01" and c["name"] == name)
+
+    state, _ = ask("생활비 카드 잠가줘", "t-card")
+    prompt = waiting_prompt(state)
+    record("카드 잠금 요청 -> 승인 화면", state, prompt, prompt.startswith("생활비 카드를 일시 잠금할게요."))
+    state, answer = resume("예", "t-card")
+    last = data_store.load()["requests"][-1]
+    record("'예' -> locked + 완료 기록(card_id)", state, answer,
+           card_status("생활비 카드") == "locked" and last["status"] == "completed"
+           and last["details"] == {"card_id": "card_001"})
+    state, answer = ask("생활비 카드 잠가줘", "t-card-again")
+    record("이미 잠긴 카드 -> 승인 없이 안내", state, answer,
+           not waiting_prompt(state) and "이미 잠겨 있어요" in answer)
+    state, answer = ask("주식 카드 잠가줘", "t-card-unknown")
+    record("없는 카드 -> 카드 후보로 안내", state, answer,
+           answer.startswith("말씀하신 카드를 찾지 못했어요") and "여행 카드" in answer and "비상금" not in answer)
+
     results.append(("모든 시나리오 뒤 무결성 10개 규칙 통과", not any(check_integrity(data_store.load()).values())))
 
     data_store.reset()

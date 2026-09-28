@@ -62,6 +62,21 @@ INTENTS = {
 READ_INTENTS = frozenset(name for name, info in INTENTS.items() if info["kind"] == "read")
 WRITE_INTENTS = frozenset(name for name, info in INTENTS.items() if info["kind"] == "write")
 
+# ── slot 표 ─────────────────────────────────────────────────────
+# 칸마다 "무엇을 가리키는 칸인가"를 여기에만 적는다 (2026-09-28, Step 7 — 전에는 graph.py에 흩어져 있었음).
+#   kind    이름을 고르는 칸이면 그 종류 (account / card). 후보 목록은 functions.NAME_LISTS[kind]에서 찾는다
+#   role    사용자에게 칸을 가리킬 때 쓰는 이름 ("출금 계좌를 알려 주세요")
+#   suffix  고른 이름 뒤에 붙일 말 ("'여행 자금' 계좌로 이해했어요"). 카드 이름은 이미 "…카드"라 빈칸
+SLOTS = {
+    "accounts":     {"kind": "account", "role": "조회 계좌", "suffix": "계좌"},
+    "from_account": {"kind": "account", "role": "출금 계좌", "suffix": "계좌"},
+    "to_account":   {"kind": "account", "role": "입금 계좌", "suffix": "계좌"},
+    "amount":       {"kind": None,      "role": "금액",      "suffix": ""},
+    "card":         {"kind": "card",    "role": "카드",      "suffix": ""},
+}
+KIND_LABELS = {"account": "계좌", "card": "카드"}    # "말씀하신 계좌(카드)를 찾지 못했어요"
+NAME_SLOTS = [slot for slot, info in SLOTS.items() if info["kind"]]   # 이름을 고르는 칸들 (자동 생성)
+
 # ── INTENTS 표 밖의 특별한 값 ─────────────────────────────────────
 UNSUPPORTED = "unsupported"          # intent — 이 에이전트가 처리할 수 없는 요청 (LLM이 고른다)
 NOT_UNDERSTOOD = "not_understood"    # intent — LLM 호출이 실패했거나 형식을 어겼다 (코드가 넣는다)
