@@ -14,6 +14,8 @@
 단독 실행:  uv run python src/functions.py   (Step 2·3 완료 기준 자체 확인, API 호출 없음)
 """
 
+from datetime import datetime
+
 CURRENT_USER_ID = "user_01"   # 인증(로그인)은 범위 밖. 모든 조회·변경은 이 사용자의 데이터만 대상으로 한다 (인가)
 
 
@@ -71,6 +73,20 @@ def account_list_with_balance(data: dict, accounts: list[str] | None = None) -> 
     ]
 
 
+def josa(word: str, pair: str) -> str:
+    """받침에 맞는 조사를 고른다. pair는 "을/를", "이/가", "은/는", "으로/로".
+
+    josa("저축", "으로/로") → "으로",  josa("생활비", "으로/로") → "로",  josa("비상금", "을/를") → "을"
+    "으로/로"는 ㄹ받침이면 "로" ("여행 자금"은 ㅁ받침이라 "으로"). 한글이 아니면 받침 없음으로 본다.
+    """
+    with_final, without_final = pair.split("/")
+    code = ord(word[-1]) - 0xAC00                             # 한글 음절 "가"부터의 순번
+    final = code % 28 if 0 <= code < 11172 else 0             # 받침 번호 (0 = 받침 없음, 8 = ㄹ)
+    if pair == "으로/로" and final == 8:
+        return without_final
+    return with_final if final else without_final
+
+
 def format_account_list_with_balance(rows: list[dict]) -> str:
     """조회 결과를 사용자에게 보여줄 문장으로 만든다 (정해진 틀, LLM 사용 안 함).
 
@@ -94,10 +110,80 @@ READ_TASKS = {
 }
 
 
-# ── 변경 (승인 필요) — Step 5, 7에서 만든다 ─────────────────────
-# TODO: TransferInstantHandler      intent "transfer_instant"
-# TODO: CardLockTemporaryHandler    intent "card_lock_temporary"
-# TODO: HANDLERS — intent 이름 → Handler 인스턴스. 키 목록이 intents.py의 WRITE_INTENTS와 정확히 같아야 한다
+# ── 변경 (승인 필요) ─────────────────────────────────────────────
+# 형식 검사(필수 slot이 있나, uncertain이 아닌가)는 그래프가 intents.py를 보고 공통으로 한다.
+# Handler는 "업무" 검사만 한다. 거절은 에러가 아니라 사유 문장으로 돌려준다 (설계서 6장 규칙 5)
+
+def _next_id(items: list[dict], field: str, prefix: str) -> str:
+    """'tx_030'까지 있으면 'tx_031'. 번호는 3자리 이상으로 맞춘다."""
+    numbers = [int(item[field].removeprefix(prefix)) for item in items if item.get(field)]
+    return f"{prefix}{max(numbers, default=0) + 1:03d}"
+
+
+class TransferInstantHandler:
+    """즉시이체 — 내 계좌 사이에서 금액을 옮긴다. intent "transfer_instant"."""
+
+    def validate(self, params: dict, data: dict) -> tuple[dict | None, str | None]:
+        """업무 검사 후 처리안을 만든다. (처리안, None) 또는 (None, 거절 사유).
+
+        처리안을 만들 때(plan_change)와 실행 직전(apply_change)에 **같은 함수**를 부른다
+        → 두 검사가 어긋날 일이 없다 (Step 5 결정 5).
+        """
+        amount = params["amount"]
+        if amount <= 0:
+            return None, f"이체 금액은 0원보다 커야 해요. (말씀하신 금액: {amount:,}원)"
+        if params["from_account"] == params["to_account"]:
+            return None, "출금 계좌와 입금 계좌가 같아요. 다른 계좌를 골라 주세요."
+
+        mine = {acc["nickname"]: acc for acc in _my_accounts(data)}
+        source, target = mine[params["from_account"]], mine[params["to_account"]]   # 허용 목록 밖이면 KeyError (버그)
+        if source["balance"] < amount:
+            return None, (f"{source['nickname']} 계좌 잔액이 부족해요. "
+                          f"(잔액 {source['balance']:,}원, 이체 금액 {amount:,}원)")
+
+        return {
+            "from_account_id": source["account_id"], "from_name": source["nickname"],
+            "to_account_id": target["account_id"], "to_name": target["nickname"],
+            "amount": amount,
+            "balance_after": source["balance"] - amount,
+        }, None
+
+    def describe(self, plan: dict) -> str:
+        """승인 화면에 보여줄 문장 (정해진 틀, Step 5 결정 2). 숫자는 처리안의 값을 그대로 옮긴다."""
+        return (f"{plan['from_name']} → {plan['to_name']}, {plan['amount']:,}원을 즉시이체할게요.\n"
+                f"이체 후 {plan['from_name']} 잔액은 {plan['balance_after']:,}원이에요.")
+
+    def apply(self, plan: dict, data: dict, now: datetime) -> str:
+        """data를 실제로 바꾼다 (저장은 하지 않는다 — 부르는 쪽이 data_store.save).
+
+        잔액 두 곳 + 거래 두 줄을 함께 바꾼다. 두 줄은 같은 transfer_id로 묶인다 (무결성 규칙 9).
+        돌려주는 값: 완료 안내 문장
+        """
+        accounts = {acc["account_id"]: acc for acc in data["accounts"]}
+        accounts[plan["from_account_id"]]["balance"] -= plan["amount"]
+        accounts[plan["to_account_id"]]["balance"] += plan["amount"]
+
+        transfer_id = _next_id(data["transactions"], "transfer_id", "tr_")
+        occurred_at = now.isoformat(timespec="seconds")
+        for account_id, tx_type in [(plan["from_account_id"], "withdrawal"), (plan["to_account_id"], "deposit")]:
+            data["transactions"].append({
+                "transaction_id": _next_id(data["transactions"], "transaction_id", "tx_"),
+                "owner_id": CURRENT_USER_ID, "account_id": account_id, "type": tx_type,
+                "amount": plan["amount"], "occurred_at": occurred_at,
+                "card_id": None, "merchant": None, "transfer_id": transfer_id,
+            })
+
+        balance = accounts[plan["from_account_id"]]["balance"]
+        to_name = plan["to_name"]
+        return (f"{plan['from_name']}에서 {to_name}{josa(to_name, '으로/로')} {plan['amount']:,}원을 보냈어요.\n"
+                f"{plan['from_name']} 잔액은 {balance:,}원이에요.")
+
+
+# 변경 업무 표 — intent 이름 → Handler. graph.py는 여기서 찾아 쓰기만 한다
+# TODO(Step 7): "card_lock_temporary": CardLockTemporaryHandler()
+HANDLERS = {
+    "transfer_instant": TransferInstantHandler(),
+}
 
 
 # ── 단독 실행: Step 2 완료 기준 확인 ─────────────────────────────
@@ -140,6 +226,37 @@ def _self_check() -> None:
     results.append(("문장 틀: 1개면 한 문장, 금액에 쉼표",
                     format_account_list_with_balance(one) == "생활비 계좌 잔액은 520,000원입니다."))
     results.append(("READ_TASKS 키 = intents.py의 READ_INTENTS", set(READ_TASKS) == READ_INTENTS))
+
+    # Step 5에서 추가한 것 — 이체 Handler (파일에 저장하지 않고 복사본에서만 확인)
+    from integrity import KST, check_integrity
+    from intents import WRITE_INTENTS
+    handler = HANDLERS["transfer_instant"]
+    ok = {"from_account": "생활비", "to_account": "저축", "amount": 100000}
+
+    plan, reason = handler.validate(ok, data)
+    results.append(("이체 검사 통과 -> 처리안, 이체 후 잔액 420,000", reason is None and plan["balance_after"] == 420000))
+    results.append(("승인 문장에 방향·금액·이체 후 잔액",
+                    handler.describe(plan) == "생활비 → 저축, 100,000원을 즉시이체할게요.\n이체 후 생활비 잔액은 420,000원이에요."))
+    results.append(("금액 0 이하 -> 거절 사유", handler.validate({**ok, "amount": -5000}, data)[1] is not None))
+    results.append(("출금 = 입금 -> 거절 사유", handler.validate({**ok, "to_account": "생활비"}, data)[1] is not None))
+    results.append(("잔액 부족 -> 거절 사유에 잔액", "75,000원" in (handler.validate(
+        {"from_account": "비상금", "to_account": "저축", "amount": 100000}, data)[1] or "")))
+
+    after = copy.deepcopy(data)
+    handler.apply(plan, after, datetime.now(KST))
+    balances = {a["nickname"]: a["balance"] for a in _my_accounts(after)}
+    results.append(("apply 후 생활비 420,000 / 저축 1,950,000", balances["생활비"] == 420000 and balances["저축"] == 1950000))
+    new_txs = after["transactions"][-2:]
+    results.append(("거래 2줄이 같은 transfer_id", new_txs[0]["transfer_id"] == new_txs[1]["transfer_id"] == "tr_001"))
+    results.append(("apply 후 무결성 9개 규칙 통과", not any(check_integrity(after).values())))
+
+    broken = copy.deepcopy(after)
+    broken["transactions"].pop()                              # 입금 줄을 빠뜨린 버그를 흉내
+    broken["accounts"][1]["balance"] -= 100000                # 잔액까지 맞춰도
+    results.append(("입금 줄이 빠지면 규칙 9가 잡음", bool(check_integrity(broken)["transfer_pairs"])))
+
+    results.append(("HANDLERS 키는 WRITE_INTENTS 안에", set(HANDLERS) <= WRITE_INTENTS))
+    results.append(("조회·검사가 원래 데이터를 바꾸지 않음", data == before))
 
     for description, passed in results:
         print(f"[{'OK  ' if passed else 'FAIL'}] {description}")

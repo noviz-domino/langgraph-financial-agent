@@ -1,8 +1,8 @@
 """터미널에서 사용자 입력을 계속 받아 그래프를 실행한다.
 
 루프는 두 단계로 나눈다 — 그래프 돌리기(run_turn) / 결과 보여주기(show_result).
-Step 5에서 interrupt(승인 대기)가 생기면 show_result에 "멈췄으면 승인 받기"만 끼워 넣는다.
-(지금은 interrupt가 없어서 그 길을 확인할 수 없으므로 미리 만들지 않는다)
+그래프가 승인 화면에서 멈추면(interrupt) show_result가 알려주고, 다음 입력은 새 요청이 아니라
+멈춘 그래프를 이어 가는 답(Command(resume=...))으로 보낸다.
 
 결정 사항 (devlog/2026-09-28 참고)
     종료는 정해진 단어로만 (EXIT_WORDS) — LLM을 거치지 않는다. 종료는 은행 업무가 아니라 프로그램 조작이다
@@ -15,6 +15,7 @@ import logging
 import uuid
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 from graph import build_graph
 
@@ -24,14 +25,25 @@ EXIT_WORDS = {"종료", "exit", "quit"}
 #               (명세: "이전 승인만으로 변경을 자동 실행하지 않는다")
 
 
-def run_turn(graph, config: dict, text: str) -> dict:
-    """사용자 말 하나로 그래프를 한 바퀴 돌리고 최종 State를 돌려준다."""
+def run_turn(graph, config: dict, text: str, waiting: bool) -> dict:
+    """사용자 말 하나로 그래프를 돌린다.
+
+    waiting=False  새 요청 → START부터 한 바퀴
+    waiting=True   승인 화면에서 멈춰 있음 → 이 말은 승인 답. 멈춘 자리부터 이어 간다
+    """
+    if waiting:
+        return graph.invoke(Command(resume=text), config)
     return graph.invoke({"messages": [HumanMessage(content=text)]}, config)
 
 
-def show_result(state: dict) -> None:
-    """그래프 결과를 화면에 보여준다. Step 5: 여기서 interrupt 여부를 보고 승인을 받는다."""
+def show_result(state: dict) -> bool:
+    """그래프 결과를 화면에 보여준다. 승인을 기다리며 멈춰 있으면 True."""
+    interrupts = state.get("__interrupt__")                     # 멈췄으면 invoke 결과에 이 칸이 생긴다
+    if interrupts:
+        print(interrupts[0].value["prompt"])
+        return True
     print(state["messages"][-1].content)
+    return False
 
 
 def main() -> None:
@@ -40,6 +52,7 @@ def main() -> None:
     config = {"configurable": {"thread_id": f"cli-{uuid.uuid4().hex[:8]}"}}   # 실행할 때마다 새 대화
 
     print("은행 업무 도우미입니다. 끝내려면 '종료'를 입력하세요.")
+    waiting = False                                             # 승인 답을 기다리는 중인가
     while True:
         try:
             text = input("\n> ").strip()
@@ -50,7 +63,7 @@ def main() -> None:
             continue
         if text.lower() in EXIT_WORDS:
             break
-        show_result(run_turn(graph, config, text))
+        waiting = show_result(run_turn(graph, config, text, waiting))
     print("이용해 주셔서 감사합니다.")
 
 
