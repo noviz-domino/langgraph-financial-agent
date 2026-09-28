@@ -102,7 +102,7 @@ uv run python src/main.py
 
 ## 실패 상황 확인 결과
 
-`uv run python src/graph.py` 자체 확인(45개)의 실제 출력이다. 모든 경우에 **잔액·거래는 바뀌지 않았고**, 마지막에 장부 무결성 10/10을 통과했다.
+`uv run python src/scenarios.py` 대화 시나리오(47개)의 실제 출력이다. 모든 경우에 **잔액·거래는 바뀌지 않았고**, 마지막에 장부 무결성 10/10을 통과했다.
 
 | 상황 | 입력 | 실제 출력 |
 |---|---|---|
@@ -137,6 +137,7 @@ START → understand ─┬─ 정보 부족 → ask_more 🛑 ──(답)──
 |---|---|
 | `src/main.py` | 터미널 입력 루프. 멈춰 있으면 다음 입력을 `Command(resume=...)`로 |
 | `src/graph.py` | State, 노드 8개, 조건부 Edge 4개. LLM은 `understand` 한 곳 |
+| `src/scenarios.py` | 대화 시나리오 확인 (그래프 + 업무 코드 + 저장을 함께) |
 | `src/intents.py` | intent와 slot의 유일한 정의처 |
 | `src/functions.py` | 업무 코드 — 조회 함수, 이체·카드 잠금 Handler(`validate`·`describe`·`apply`) |
 | `src/data_store.py` | 장부 읽기·저장의 유일한 통로 (무결성 검사 + atomic write + 재시도) |
@@ -149,7 +150,8 @@ START → understand ─┬─ 정보 부족 → ask_more 🛑 ──(답)──
 uv run python src/integrity.py    # 무결성 10/10 (API 없음)
 uv run python src/data_store.py   # 저장 통로 10/10 (API 없음, 작업용 복사본을 다시 만듦)
 uv run python src/functions.py    # 업무 코드 31/31 (API 없음)
-uv run python src/graph.py        # 대화 시나리오 45/45 (Gemini 41회 호출)
+uv run python src/graph.py        # 그래프 모양을 Mermaid로 출력 (API 없음)
+uv run python src/scenarios.py    # 대화 시나리오 47개 (Gemini 41회 호출 + 가짜 LLM 시나리오)
 ```
 
 ---
