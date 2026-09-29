@@ -5,75 +5,104 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>은행 업무 도우미</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
 <style>
   :root {
-    --bg: #f2f4f6; --panel: #ffffff; --line: #e5e8eb; --text: #191f28; --sub: #6b7684; --muted: #8b95a1;
-    --accent: #3182f6; --accent-bg: #e8f3ff; --accent-text: #1b64da; --user-bg: #3182f6; --user-text: #ffffff;
-    --plus: #1a9e6c; --minus: #e5484d; --warn-bg: #fff4e5; --warn-text: #a15c00; --radius: 14px;
+    --bg: #eef3fa; --panel: #ffffff; --soft: #f5f8fc; --line: #e3e9f2; --text: #172033; --sub: #5d6b82; --muted: #8e9ab0;
+    --accent: #2f6bff; --accent-2: #5a8cff; --accent-soft: #e7eeff; --accent-text: #2352cc;
+    --plus: #13a46b; --minus: #e5484d; --warn: #f59f00; --warn-soft: #fff3db; --warn-text: #a86500;
+    --c-blue: #2f6bff; --c-green: #13a46b; --c-orange: #ff8a00; --c-purple: #8b5cf6;
+    --radius: 18px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #101113; --panel: #1b1d21; --line: #2c2f34; --text: #eceef0; --sub: #a0a7b0; --muted: #7c838c;
-      --accent: #4c93ff; --accent-bg: #1c2b44; --accent-text: #8ab8ff; --user-bg: #3182f6; --user-text: #ffffff;
-      --plus: #3ecf8e; --minus: #ff6b6f; --warn-bg: #3a2a12; --warn-text: #f0b460;
+      --bg: #0d1424; --panel: #151f33; --soft: #1b2740; --line: #26324b; --text: #e8edf7; --sub: #a3b0c7; --muted: #7584a0;
+      --accent: #4d82ff; --accent-2: #6d99ff; --accent-soft: #1f2e52; --accent-text: #9dbbff;
+      --warn-soft: #3a2c10; --warn-text: #f5bf4f;
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   button { font: inherit; cursor: pointer; }
-  .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; max-width: 1080px; height: 100dvh; margin: 0 auto; padding: 16px; }
+  .app { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; max-width: 1120px; height: 100dvh; margin: 0 auto; padding: 20px; }
 
-  .ledger { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
-  .ledger h2 { margin: 0; font-size: 18px; font-weight: 600; }
-  .ledger h3 { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--sub); }
-  .row { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
-  .row:last-child { border-bottom: 0; }
-  .row .amount { font-weight: 600; font-variant-numeric: tabular-nums; transition: color .6s; }
-  .row .amount.up { color: var(--plus); } .row .amount.down { color: var(--minus); }
-  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--sub); }
-  .badge.locked, .badge.cancelled, .badge.expired { background: var(--warn-bg); color: var(--warn-text); }
-  .badge.completed { background: var(--accent-bg); color: var(--accent-text); }
-  .badge.failed { background: #fdecec; color: var(--minus); }
-  .node { font-size: 12px; color: var(--sub); background: var(--bg); border-radius: 10px; padding: 10px 12px; line-height: 1.6; }
-  .node b { color: var(--text); font-weight: 600; }
-  .ghost { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 9px; }
-  .ghost:hover { background: var(--bg); }
+  /* 왼쪽 장부 */
+  .ledger { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; }
+  .ledger > * { flex-shrink: 0; }                               /* 칸이 길어져도 카드가 찌그러지지 않고 스크롤되게 */
+  .total { background: var(--accent); color: #fff; border-radius: var(--radius); padding: 20px 22px; position: relative; overflow: hidden; }
+  .total::after { content: ""; position: absolute; right: -40px; top: -40px; width: 150px; height: 150px; border-radius: 50%; background: rgba(255,255,255,.12); }
+  .total .label { font-size: 13px; opacity: .85; display: flex; align-items: center; gap: 6px; }
+  .total .value { font-size: 28px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+  .total .hint { font-size: 12px; opacity: .8; margin-top: 4px; }
+  .box { background: var(--panel); border-radius: var(--radius); padding: 16px 18px; }
+  .box h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--sub); display: flex; align-items: center; gap: 6px; }
+  .acct { display: flex; align-items: center; gap: 12px; padding: 9px 0; }
+  .dot { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; font-size: 18px; flex: none; }
+  .acct .name { flex: 1; font-size: 15px; font-weight: 500; }
+  .acct .amount { font-weight: 700; font-variant-numeric: tabular-nums; transition: color .8s; }
+  .acct .amount.up { color: var(--plus); } .acct .amount.down { color: var(--minus); }
+  .badge { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--soft); color: var(--sub); }
+  .badge.active { background: #e3f6ee; color: #0f8a59; }
+  .badge.locked, .badge.cancelled, .badge.expired { background: var(--warn-soft); color: var(--warn-text); }
+  .badge.completed { background: var(--accent-soft); color: var(--accent-text); }
+  .badge.failed { background: #fde8e8; color: var(--minus); }
+  .req { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 7px 0; }
+  .req .what { font-weight: 600; font-size: 14px; }
+  .req .when { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .note { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0; }
+  .steps { display: flex; gap: 6px; margin: 4px 0 8px; }
+  .step { flex: 1; text-align: center; font-size: 11px; font-weight: 600; padding: 7px 2px; border-radius: 10px; background: var(--soft); color: var(--muted); transition: all .3s; }
+  .step.on { background: var(--accent); color: #fff; }
+  .step.wait { background: var(--warn); color: #fff; }
+  .flow { font-size: 12px; color: var(--sub); line-height: 1.5; }
+  .reset { background: var(--panel); border: 1.5px dashed var(--line); color: var(--sub); border-radius: 14px; padding: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .reset:hover { border-color: var(--accent); color: var(--accent-text); }
 
-  .chat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
-  .chat header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
-  .chat header h1 { margin: 0; font-size: 17px; font-weight: 600; }
-  .chat header span { font-size: 13px; color: var(--sub); }
-  .toggle { display: none; margin-left: auto; }
-  .log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-  .msg { max-width: 78%; padding: 11px 14px; border-radius: 16px; line-height: 1.55; white-space: pre-line; font-size: 15px; }
-  .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--user-text); border-bottom-right-radius: 6px; }
-  .msg.bot { align-self: flex-start; background: var(--bg); border-bottom-left-radius: 6px; }
-  .card { align-self: flex-start; width: min(360px, 88%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
-  .card .kind { font-size: 12px; color: var(--accent-text); font-weight: 600; margin-bottom: 6px; }
-  .card .body { white-space: pre-line; line-height: 1.6; font-size: 15px; }
-  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .primary { flex: 1; background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 11px; font-weight: 600; }
-  .secondary { flex: 1; background: var(--bg); color: var(--text); border: 0; border-radius: 10px; padding: 11px; }
-  .chip { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 7px 13px; font-size: 14px; }
-  .chip:hover { border-color: var(--accent); color: var(--accent-text); }
-  .actions.done button { opacity: .45; pointer-events: none; }
-  .typing { align-self: flex-start; color: var(--muted); font-size: 14px; padding: 4px 6px; }
+  /* 오른쪽 채팅 */
+  .chat { background: var(--panel); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .chat header { padding: 16px 22px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 38px; height: 38px; border-radius: 13px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 20px; flex: none; }
+  .chat header h1 { margin: 0; font-size: 16px; font-weight: 700; }
+  .chat header p { margin: 1px 0 0; font-size: 12px; color: var(--sub); display: flex; align-items: center; gap: 5px; }
+  .live { width: 7px; height: 7px; border-radius: 50%; background: var(--plus); display: inline-block; }
+  .toggle { display: none; margin-left: auto; background: var(--soft); border: 0; color: var(--text); border-radius: 10px; padding: 7px 12px; font-weight: 600; }
+  .log { flex: 1; overflow-y: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 76%; padding: 12px 15px; border-radius: 18px; line-height: 1.55; white-space: pre-line; font-size: 15px; animation: pop .18s ease-out; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
+  .msg.bot { align-self: flex-start; background: var(--soft); border-bottom-left-radius: 6px; }
+  @keyframes pop { from { transform: translateY(4px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .card { align-self: flex-start; width: min(370px, 90%); background: var(--panel); border: 1.5px solid var(--line); border-radius: 20px; padding: 18px; animation: pop .18s ease-out; }
+  .card.confirm { border-color: var(--accent); }
+  .card .kind { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: var(--accent-text); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
+  .card.ask .kind { color: var(--warn-text); background: var(--warn-soft); }
+  .card .big { font-size: 30px; font-weight: 800; letter-spacing: -.8px; margin: 12px 0 2px; font-variant-numeric: tabular-nums; }
+  .card .route { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .card .body { white-space: pre-line; line-height: 1.6; font-size: 14px; color: var(--sub); margin-top: 10px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .primary { flex: 1; background: var(--accent); color: #fff; border: 0; border-radius: 14px; padding: 13px; font-weight: 700; }
+  .primary:hover { background: var(--accent-2); }
+  .secondary { flex: 1; background: var(--soft); color: var(--text); border: 0; border-radius: 14px; padding: 13px; font-weight: 600; }
+  .chip { background: var(--panel); border: 1.5px solid var(--line); color: var(--text); border-radius: 999px; padding: 8px 14px; font-size: 14px; font-weight: 500; }
+  .chip:hover { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+  .actions.done button { opacity: .4; pointer-events: none; }
+  .typing { align-self: flex-start; background: var(--soft); border-radius: 18px; padding: 14px 16px; display: flex; gap: 4px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1s infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
   .examples { display: flex; flex-wrap: wrap; gap: 8px; }
-  form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--line); }
-  input[type=text] { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 12px; padding: 12px 14px; font: inherit; font-size: 15px; outline: none; }
-  input[type=text]:focus { border-color: var(--accent); }
-  form button { background: var(--accent); color: #fff; border: 0; border-radius: 12px; padding: 0 18px; font-weight: 600; }
+  form { display: flex; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--line); }
+  input[type=text] { flex: 1; min-width: 0; border: 1.5px solid var(--line); background: var(--soft); color: var(--text); border-radius: 14px; padding: 13px 16px; font: inherit; font-size: 15px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); background: var(--panel); }
+  form button { background: var(--accent); color: #fff; border: 0; border-radius: 14px; width: 50px; font-size: 20px; display: grid; place-items: center; }
   form button:disabled, input:disabled { opacity: .5; }
 
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; padding: 0; gap: 0; }
-    .chat { border-radius: 0; border: 0; }
-    .ledger { display: none; border-radius: 0; border: 0; border-bottom: 1px solid var(--line); max-height: 55dvh; }
+    .chat { border-radius: 0; }
+    .ledger { display: none; padding: 12px; max-height: 60dvh; background: var(--bg); }
     .app.show-ledger .ledger { display: flex; }
     .app.show-ledger { grid-template-rows: auto minmax(0, 1fr); }
-    .toggle { display: inline-block; padding: 6px 12px; }
-    .chat header span { display: none; }
+    .toggle { display: inline-block; }
     .msg { max-width: 88%; }
   }
 </style>
@@ -81,24 +110,35 @@
 <body>
 <div class="app" id="app">
   <aside class="ledger" aria-label="내 장부">
-    <h2>내 장부</h2>
-    <section><h3>계좌</h3><div id="accounts"></div></section>
-    <section><h3>카드</h3><div id="cards"></div></section>
-    <section><h3>최근 처리 기록</h3><div id="requests"><p class="note">승인 화면까지 간 요청이 여기 남아요.</p></div></section>
-    <div class="node" id="node"><b>대기 중</b><br>말을 걸면 그래프가 움직여요.</div>
-    <button class="ghost" id="reset">처음으로 (장부 되돌리기)</button>
-    <p class="note">가상의 장부예요. 방문자마다 따로 있고, 하루가 지나면 지워져요.</p>
+    <div class="total">
+      <div class="label"><i class="ti ti-wallet" aria-hidden="true"></i>내 계좌 총 잔액</div>
+      <div class="value" id="total">-</div>
+      <div class="hint">가상의 장부예요 · 방문자마다 따로 있어요</div>
+    </div>
+    <div class="box"><h3><i class="ti ti-building-bank" aria-hidden="true"></i>계좌</h3><div id="accounts"></div></div>
+    <div class="box"><h3><i class="ti ti-credit-card" aria-hidden="true"></i>카드</h3><div id="cards"></div></div>
+    <div class="box">
+      <h3><i class="ti ti-route" aria-hidden="true"></i>지금 에이전트는</h3>
+      <div class="steps" id="steps">
+        <div class="step" data-step="understand">해석</div><div class="step" data-step="plan">처리안</div>
+        <div class="step" data-step="confirm">승인</div><div class="step" data-step="apply">실행</div>
+      </div>
+      <div class="flow" id="flow">말을 걸면 LangGraph가 움직여요.</div>
+    </div>
+    <div class="box"><h3><i class="ti ti-history" aria-hidden="true"></i>최근 처리 기록</h3><div id="requests"></div></div>
+    <button class="reset" id="reset"><i class="ti ti-refresh" aria-hidden="true"></i>처음으로 (장부 되돌리기)</button>
   </aside>
 
   <main class="chat">
     <header>
-      <h1>은행 업무 도우미</h1><span>LangGraph · 승인 후에만 실행</span>
-      <button class="ghost toggle" id="toggle">장부</button>
+      <div class="avatar"><i class="ti ti-sparkles" aria-hidden="true"></i></div>
+      <div><h1>은행 업무 도우미</h1><p><span class="live"></span>승인한 일만 실행해요</p></div>
+      <button class="toggle" id="toggle"><i class="ti ti-wallet" aria-hidden="true"></i> 장부</button>
     </header>
     <div class="log" id="log" aria-live="polite"></div>
     <form id="form">
       <input type="text" id="input" maxlength="300" placeholder="생활비에서 저축으로 10만 원 보내줘" autocomplete="off">
-      <button id="send">보내기</button>
+      <button id="send" aria-label="보내기"><i class="ti ti-send" aria-hidden="true"></i></button>
     </form>
   </main>
 </div>
@@ -107,94 +147,103 @@
 const $ = (id) => document.getElementById(id);
 const log = $("log"), input = $("input"), send = $("send");
 const EXAMPLES = ["내 계좌 전부 보여줘", "생활비에서 저축으로 10만 원 보내줘", "여행 갈 때 쓰는 통장 잔액은?", "카드 잠가줘"];
-const NODE_TEXT = {
-  ask_more: ["ask_more 🛑", "정보가 부족해서 되묻는 중이에요 (루프 1)"],
-  confirm_change: ["confirm_change 🛑", "승인을 기다리는 중이에요. 아직 장부는 그대로예요"],
-};
+const PALETTE = ["--c-blue", "--c-green", "--c-orange", "--c-purple"];
+const ICONS = { "생활비": "ti-shopping-bag", "저축": "ti-pig-money", "여행 자금": "ti-plane", "비상금": "ti-lifebuoy" };
 let session = null, busy = false, lastBalances = {};
 
 function won(n) { return n.toLocaleString("ko-KR") + "원"; }
 function scroll() { log.scrollTop = log.scrollHeight; }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function colorOf(i) { return getComputedStyle(document.documentElement).getPropertyValue(PALETTE[i % PALETTE.length]).trim(); }
 
-function bubble(text, who) {
-  const el = document.createElement("div");
-  el.className = "msg " + who;
-  el.textContent = text;
-  log.appendChild(el); scroll();
-  return el;
-}
+function bubble(text, who) { const b = el("div", "msg " + who, text); log.appendChild(b); scroll(); return b; }
 
 function cleanPrompt(text, hasChips) {
-  // 버튼이 대신하는 안내는 뺀다: "진행하려면 '예'…", "(그만두려면 '취소')", 후보 목록 글자 (버튼으로 보여주므로)
+  // 버튼이 대신하는 안내는 뺀다: "진행하려면 '예'…", "(그만두려면 '취소')", 후보 목록 글자
   return text.split("\n")
     .filter((l) => !l.startsWith("진행하려면") && !l.startsWith("(그만두려면") && !(hasChips && l.startsWith("고를 수 있는")))
     .map((l) => (hasChips && l.includes("이 중에서 골라 주세요:") ? l.split(":")[0] + "." : l))
     .join("\n");
 }
 
-function card(kind, text, buttons) {
-  const el = document.createElement("div");
-  el.className = "card";
-  el.innerHTML = `<div class="kind"></div><div class="body"></div><div class="actions"></div>`;
-  el.querySelector(".kind").textContent = kind;
-  el.querySelector(".body").textContent = cleanPrompt(text, buttons.some((b) => b[2] === "chip"));
-  const actions = el.querySelector(".actions");
+function card(type, text, buttons) {
+  const c = el("div", "card " + type);
+  const kind = el("div", "kind");
+  kind.innerHTML = type === "confirm" ? '<i class="ti ti-shield-check"></i>승인이 필요해요' : '<i class="ti ti-help-circle"></i>조금 더 알려 주세요';
+  c.appendChild(kind);
+  let body = cleanPrompt(text, buttons.some((b) => b[2] === "chip"));
+  const route = body.match(/^(.+?) → (.+?), ([\d,]+원)을 즉시이체할게요\.$/m);  // 이체 승인이면 금액·방향을 크게
+  if (type === "confirm" && route) {
+    c.appendChild(el("div", "big", route[3]));
+    const r = el("div", "route");
+    r.innerHTML = `<span></span><i class="ti ti-arrow-right" style="color:var(--muted)"></i><span></span>`;
+    r.children[0].textContent = route[1]; r.children[2].textContent = route[2];
+    c.appendChild(r);
+    body = body.replace(route[0], "").trim();
+  }
+  if (body) c.appendChild(el("div", "body", body));
+  const actions = el("div", "actions");
   for (const [label, value, style] of buttons) {
-    const b = document.createElement("button");
-    b.className = style; b.textContent = label;
+    const b = el("button", style, label);
     b.onclick = () => { actions.classList.add("done"); say(value); };
     actions.appendChild(b);
   }
-  log.appendChild(el); scroll();
+  c.appendChild(actions);
+  log.appendChild(c); scroll();
 }
 
 function renderLedger(ledger) {
+  $("total").textContent = won(ledger.accounts.reduce((s, a) => s + a.balance, 0));
   $("accounts").innerHTML = "";
-  for (const a of ledger.accounts) {
-    const row = document.createElement("div"); row.className = "row";
+  ledger.accounts.forEach((a, i) => {
+    const row = el("div", "acct");
+    const color = colorOf(i);
+    const dot = el("div", "dot"); dot.style.background = color + "1f"; dot.style.color = color;
+    dot.innerHTML = `<i class="ti ${ICONS[a.name] || "ti-building-bank"}"></i>`;
     const prev = lastBalances[a.name];
     const cls = prev === undefined || prev === a.balance ? "" : (a.balance > prev ? "up" : "down");
-    row.innerHTML = `<span></span><span class="amount ${cls}"></span>`;
-    row.children[0].textContent = a.name; row.children[1].textContent = won(a.balance);
+    const amount = el("span", "amount " + cls, won(a.balance));
+    row.append(dot, el("span", "name", a.name), amount);
     $("accounts").appendChild(row);
     lastBalances[a.name] = a.balance;
-    if (cls) setTimeout(() => row.children[1].classList.remove(cls), 2500);
-  }
+    if (cls) setTimeout(() => amount.classList.remove(cls), 2500);
+  });
   $("cards").innerHTML = "";
-  for (const c of ledger.cards) {
-    const row = document.createElement("div"); row.className = "row";
+  ledger.cards.forEach((c, i) => {
+    const row = el("div", "acct");
+    const color = colorOf(i);
+    const dot = el("div", "dot"); dot.style.background = color + "1f"; dot.style.color = color;
+    dot.innerHTML = '<i class="ti ti-credit-card"></i>';
     const label = { active: "사용 중", locked: "잠김", reported_lost: "분실 정지" }[c.status] || c.status;
-    row.innerHTML = `<span></span><span class="badge ${c.status}"></span>`;
-    row.children[0].textContent = c.name; row.children[1].textContent = label;
+    row.append(dot, el("span", "name", c.name), el("span", "badge " + c.status, label));
     $("cards").appendChild(row);
-  }
-  if (ledger.requests.length) {
-    $("requests").innerHTML = "";
-    const text = { completed: "완료", cancelled: "취소", expired: "만료", failed: "실패" };
-    for (const r of ledger.requests) {
-      const row = document.createElement("div"); row.className = "row";
-      row.innerHTML = `<span></span><span class="badge ${r.status}"></span>`;
-      row.children[0].textContent = `${r.id} · ${r.label}`; row.children[1].textContent = text[r.status] || r.status;
-      $("requests").appendChild(row);
-    }
-  } else {
-    $("requests").innerHTML = `<p class="note">승인 화면까지 간 요청이 여기 남아요.</p>`;
+  });
+  $("requests").innerHTML = "";
+  if (!ledger.requests.length) { $("requests").appendChild(el("p", "note", "승인 화면까지 간 요청이 여기 남아요.")); return; }
+  const text = { completed: "완료", cancelled: "취소", expired: "만료", failed: "실패" };
+  for (const r of ledger.requests) {
+    const row = el("div", "req");
+    const info = el("div", "info");
+    info.append(el("div", "what", r.summary), el("div", "when", `${r.time} · ${r.label}`));
+    row.append(info, el("span", "badge " + r.status, text[r.status] || r.status));
+    $("requests").appendChild(row);
   }
 }
 
-function renderNode(node) {
-  const [name, desc] = NODE_TEXT[node] || ["대기 중", "요청 하나를 끝까지 처리했어요 (END)"];
-  $("node").innerHTML = `<b></b><br><span></span>`;
-  $("node").children[0].textContent = name; $("node").children[2].textContent = desc;
+function renderFlow(node, type) {
+  // 서버가 알려준 "멈춘 노드"를 단계 표시로. 끝까지 처리했으면 마지막 단계를 켠다
+  const states = { ask_more: ["understand", "wait", "ask_more 🛑 — 정보가 부족해서 되묻는 중 (루프 1)"],
+                   confirm_change: ["confirm", "wait", "confirm_change 🛑 — 승인 대기. 아직 장부는 그대로"] };
+  const [step, mode, desc] = states[node] || [type === "done-change" ? "apply" : type === "done" ? "understand" : null, "on",
+    type === "done-change" ? "apply_change → record_result — 실행하고 기록까지 끝" : type === "done" ? "요청 하나를 끝까지 처리했어요 (END)" : "말을 걸면 LangGraph가 움직여요."];
+  for (const s of document.querySelectorAll(".step")) s.className = "step" + (s.dataset.step === step ? " " + mode : "");
+  $("flow").textContent = desc;
 }
 
 function welcome() {
-  bubble("안녕하세요. 계좌 조회, 이체, 카드 잠금을 말로 도와드려요.\n돈이나 카드 상태가 바뀌는 일은 꼭 확인을 받은 뒤에만 실행해요.", "bot");
-  const box = document.createElement("div"); box.className = "examples";
-  for (const ex of EXAMPLES) {
-    const b = document.createElement("button"); b.className = "chip"; b.textContent = ex;
-    b.onclick = () => say(ex); box.appendChild(b);
-  }
+  bubble("안녕하세요! 계좌 조회, 이체, 카드 잠금을 말로 도와드려요.\n돈이나 카드 상태가 바뀌는 일은 꼭 확인을 받은 뒤에만 실행해요.", "bot");
+  const box = el("div", "examples");
+  for (const ex of EXAMPLES) { const b = el("button", "chip", ex); b.onclick = () => say(ex); box.appendChild(b); }
   log.appendChild(box);
 }
 
@@ -211,37 +260,32 @@ async function start() {
   renderLedger(data.ledger);
 }
 
-function setBusy(on) {
-  busy = on; input.disabled = on; send.disabled = on;
-  if (!on) input.focus();
-}
+function setBusy(on) { busy = on; input.disabled = on; send.disabled = on; if (!on) input.focus(); }
 
 async function say(text) {
   text = text.trim();
   if (!text || busy) return;
   bubble(text, "user"); input.value = "";
   setBusy(true);
-  const typing = document.createElement("div"); typing.className = "typing"; typing.textContent = "생각하는 중…";
+  const typing = el("div", "typing"); typing.innerHTML = "<i></i><i></i><i></i>";
   log.appendChild(typing); scroll();
+  const before = JSON.stringify(lastBalances);
   try {
     let data;
     try { data = await api("/api/chat", { session_id: session, text }); }
     catch (e) {
-      if (e.status !== 404 && e.status !== 422) throw e;
+      if (e.status !== 404) throw e;
       await start();                                            // 서버가 다시 켜져 세션이 없어짐 → 새로 만들고 한 번 더
       bubble("연결이 새로 시작됐어요. 장부도 처음 상태예요.", "bot");
       data = await api("/api/chat", { session_id: session, text });
     }
     typing.remove();
-    if (data.type === "confirm") {
-      card("승인이 필요해요", data.text, [["예, 진행할게요", "예", "primary"], ["취소", "취소", "secondary"]]);
-    } else if (data.type === "ask") {
-      card("조금 더 알려 주세요", data.text, [...data.candidates.map((c) => [c, c, "chip"]), ["그만두기", "취소", "chip"]]);
-    } else {
-      bubble(data.text, "bot");
-    }
+    if (data.type === "confirm") card("confirm", data.text, [["예, 진행할게요", "예", "primary"], ["취소", "취소", "secondary"]]);
+    else if (data.type === "ask") card("ask", data.text, [...data.candidates.map((c) => [c, c, "chip"]), ["그만두기", "취소", "chip"]]);
+    else bubble(data.text, "bot");
     renderLedger(data.ledger);
-    renderNode(data.node);
+    const changed = before !== JSON.stringify(lastBalances) || /잠갔어요|보냈어요/.test(data.text);
+    renderFlow(data.node, data.node ? null : changed ? "done-change" : "done");
   } catch (e) {
     typing.remove();
     bubble(e.message, "bot");
@@ -254,11 +298,9 @@ $("form").onsubmit = (e) => { e.preventDefault(); say(input.value); };
 $("toggle").onclick = () => $("app").classList.toggle("show-ledger");
 $("reset").onclick = async () => {
   if (busy) return;
-  try {
-    const data = await api("/api/reset", { session_id: session });
-    lastBalances = {}; renderLedger(data.ledger); renderNode(null);
-    log.innerHTML = ""; welcome();
-  } catch (e) { await start(); log.innerHTML = ""; welcome(); }
+  try { const data = await api("/api/reset", { session_id: session }); lastBalances = {}; renderLedger(data.ledger); }
+  catch (e) { await start(); }
+  renderFlow(null); log.innerHTML = ""; welcome();
 };
 
 start().then(welcome).catch(() => bubble("서버에 연결하지 못했어요. 잠시 후 새로고침해 주세요.", "bot"));
