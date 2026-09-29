@@ -45,6 +45,18 @@ uv run python src/main.py
 > Windows에서 한글이 깨지면 PowerShell에서 `$env:PYTHONIOENCODING = "utf-8"` 후 실행한다.
 > `bank_data.json`을 편집기로 열어 둔 채 이체하면 파일이 잠겨 저장에 실패할 수 있다 (3번 재시도 후 안내).
 
+### 4. 웹 화면 (선택)
+
+```bash
+uv run python -m uvicorn web:app --app-dir src --port 8000
+```
+
+브라우저에서 http://localhost:8000 을 연다. 왼쪽은 내 장부(계좌·카드·최근 처리 기록), 오른쪽은 채팅이다. 승인과 되묻기는 버튼으로 답할 수 있고, 지금 그래프가 멈춘 노드(`ask_more` / `confirm_change`)가 표시된다.
+
+- 방문자마다 장부가 따로 있다 (`data/ledgers/`). "처음으로"를 누르면 원본 상태로 돌아간다
+- 호출 제한: 방문자마다 10분에 30번, 서버 전체 하루 500번 (API 비용 보호)
+- Windows에서 `uvicorn` 실행 파일이 앱 제어 정책에 막히면 위처럼 `python -m uvicorn`으로 실행한다
+
 ---
 
 ## 구현한 기능
@@ -137,6 +149,7 @@ START → understand ─┬─ 정보 부족 → ask_more 🛑 ──(답)──
 |---|---|
 | `src/main.py` | 터미널 입력 루프. 멈춰 있으면 다음 입력을 `Command(resume=...)`로 |
 | `src/graph.py` | State, 노드 8개, 조건부 Edge 4개. LLM은 `understand` 한 곳 |
+| `src/web.py`, `web/index.html` | 웹 서버(FastAPI)와 채팅 화면. 그래프는 그대로, 입구만 다름 |
 | `src/scenarios.py` | 대화 시나리오 확인 (그래프 + 업무 코드 + 저장을 함께) |
 | `src/intents.py` | intent와 slot의 유일한 정의처 |
 | `src/functions.py` | 업무 코드 — 조회 함수, 이체·카드 잠금 Handler(`validate`·`describe`·`apply`) |
