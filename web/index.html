@@ -29,6 +29,13 @@
   .icon-btn:hover { color: var(--accent-text); }
   .head-actions { margin-left: auto; display: flex; gap: 8px; }
   * { box-sizing: border-box; }
+  /* 스크롤바 — 가늘게, 평소엔 배경에 묻히고 마우스를 올리면 조금 진하게 (테마 색을 따라감) */
+  .ledger, .log { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  .ledger:hover, .log:hover { scrollbar-color: var(--line) transparent; }
+  .ledger::-webkit-scrollbar, .log::-webkit-scrollbar { width: 6px; }
+  .ledger::-webkit-scrollbar-track, .log::-webkit-scrollbar-track { background: transparent; }
+  .ledger::-webkit-scrollbar-thumb, .log::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+  .ledger:hover::-webkit-scrollbar-thumb, .log:hover::-webkit-scrollbar-thumb { background: var(--line); }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   button { font: inherit; cursor: pointer; }
   .app { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; max-width: 1120px; height: 100dvh; margin: 0 auto; padding: 20px; }
