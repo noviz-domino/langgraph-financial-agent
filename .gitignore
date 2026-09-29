@@ -31,3 +31,6 @@ logs/
 # atomic write 도중 남은 임시 파일
 data/*.tmp
 
+
+# 웹 방문자별 장부 복사본
+data/ledgers/
