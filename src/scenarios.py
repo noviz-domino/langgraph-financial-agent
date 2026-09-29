@@ -2,6 +2,7 @@
 
 graph.py 한 파일의 확인이 아니라 여러 모듈을 함께 쓰는 확인이라 따로 둔다 (2026-09-28 검수에서 graph.py에서 옮김).
 작업용 복사본(bank_data.json)을 원본으로 되돌리고 시작해서, 끝나면 다시 되돌린다.
+⚠️ 그래서 main.py로 직접 써 본 변경(이체·카드 잠금)은 이 확인을 돌리면 지워진다.
 
 단독 실행:  uv run python src/scenarios.py   (Gemini API 41회 호출 + 가짜 LLM 시나리오)
 """
@@ -76,6 +77,7 @@ class ScriptedLLM:
 def run() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
     logging.getLogger("graph").setLevel(logging.INFO)          # 판단 근거 로그만 보이게 (라이브러리는 경고 이상만)
+    data_store.reset()                                          # 처음부터 원본 장부로 — CLI로 써 본 변경이 결과에 섞이지 않게
     app = g.build_graph()
 
     def ask(text: str, thread_id: str):                         # 새 요청 (멈춰 있던 질문이 있으면 버리고 처음부터)
@@ -244,7 +246,7 @@ def run() -> None:
     # ⑧ Step 8 — 되묻기(루프 1)와 승인 전 수정(루프 2)
     state, answer = ask("저축으로 10만 원 옮겨줘", "t-ask")
     record("출금 계좌 없음 -> 되묻기 + 후보", state, answer,
-           answer.startswith("출금 계좌를 알려 주세요.") and "생활비" in answer)
+           answer.startswith("즉시이체를 하려면 출금 계좌를 알려 주세요.") and "생활비" in answer)
     state, answer = resume("생활비에서", "t-ask")
     record("'생활비에서' -> 이전 값(저축, 10만 원) 유지하고 승인 화면", state, answer,
            "생활비 → 저축, 100,000원을 즉시이체" in answer)
@@ -265,7 +267,7 @@ def run() -> None:
 
     state, answer = ask("카드 잠가줘", "t-card-ask")
     record("어느 카드인지 없음 -> 카드 후보로 되묻기", state, answer,
-           answer.startswith("카드를 알려 주세요.") and "고를 수 있는 카드: 생활비 카드" in answer)
+           answer.startswith("카드 일시 잠금을 하려면 카드를 알려 주세요.") and "고를 수 있는 카드: 생활비 카드" in answer)
     state, answer = resume("저축 카드", "t-card-ask")
     record("'저축 카드' -> 승인 화면", state, answer, answer.startswith("저축 카드를 일시 잠금할게요."))
     resume("취소", "t-card-ask")
@@ -298,6 +300,15 @@ def run() -> None:
         requests = data_store.load()["requests"]
         record("승인 후 수정 중 되묻기에서 '취소' -> cancelled 기록", state, answer,
                len(requests) == count + 1 and requests[-1]["status"] == "cancelled")
+
+        # 아무 계좌도 말하지 않았는데 LLM이 출금 계좌를 지어내면 → 코드가 비우고 되묻는다 (2026-09-29)
+        fake = ScriptedLLM([transfer, transfer])               # 두 번 다 출금 = 생활비 (말에는 없음)
+        state, answer = ask("저축으로 1만 원 보내줘", "fake-guess")
+        record("짐작한 출금 계좌 -> 비우고 되묻기", state, answer, answer.startswith("즉시이체를 하려면 출금 계좌를"))
+        # 되묻기에서 "첫 번째 거"로 고르면 이름이 말에 없어도 보여준 후보라 받아들인다
+        state, answer = resume("첫 번째 거", "fake-guess")
+        record("보여준 후보에서 순서로 고름 -> 승인 화면", state, answer, "생활비 → 저축, 10,000원을 즉시이체" in answer)
+        resume("취소", "fake-guess")
     finally:
         g._get_llm = real_llm
 

@@ -307,6 +307,14 @@ def understand(state: AgentState) -> dict:
                 if not isinstance(value, list) or not value:
                     params.pop(item["slot"])
 
+    # 출금 계좌는 짐작을 허용하지 않는다 — 돈이 나가는 칸이라 말했거나, 이어받았거나, 보여준 후보에서 고른 것만.
+    # 아무 계좌도 말하지 않았는데 LLM이 출금 계좌를 채운 적이 있다 (2026-09-29). 비워서 되묻게 한다
+    shown = (state.get("missing") or state.get("result") or {}).get("candidates", [])
+    for item in _find_inferred(params, utterance.content, previous_params):
+        if item["slot"] == "from_account" and item["how"] == "guessed" and item["name"] not in shown:
+            logger.info("understand: 짐작한 출금 계좌를 비움 name=%s", item["name"])
+            params.pop("from_account")
+
     inferred = _find_inferred(params, utterance.content, previous_params)
     logger.info("understand: intent=%s params=%s inferred=%s reason=%s",
                 parsed.intent, params, [i["name"] for i in inferred], parsed.reason)
@@ -344,14 +352,19 @@ def _form_problem(intent: str, params: dict, data: dict) -> dict | None:
     return problem
 
 
-def _question(missing: dict) -> str:
-    """되묻는 문장 (정해진 틀). "생활비"처럼 답하거나 "두 번째 거"처럼 순서로 골라도 된다."""
+def _question(missing: dict, intent: str) -> str:
+    """되묻는 문장 (정해진 틀). "생활비"처럼 답하거나 "두 번째 거"처럼 순서로 골라도 된다.
+
+    빈칸을 물을 때는 업무 이름을 앞에 붙인다 — "카드"처럼 짧게 말해 AI가 업무를 짐작했을 때,
+    사용자가 무슨 업무가 진행 중인지 알고 답하게 (2026-09-29, 직접 써 보다 발견)
+    """
     candidates = ", ".join(missing.get("candidates", []))
     if missing["notice"] == "uncertain":
         label = KIND_LABELS[missing["kind"]]
         return f"말씀하신 {label}{josa(label, '을/를')} 찾지 못했어요. 이 중에서 골라 주세요: {candidates}"
+    task = INTENTS[intent]["label"]
     needed = ", ".join(SLOTS[slot]["role"] for slot in missing["slots"])
-    text = f"{needed}{josa(needed, '을/를')} 알려 주세요."
+    text = f"{task}{josa(task, '을/를')} 하려면 {needed}{josa(needed, '을/를')} 알려 주세요."
     if candidates:
         text += f"\n고를 수 있는 {KIND_LABELS[missing['kind']]}: {candidates}"
     return text
@@ -405,7 +418,7 @@ def ask_more(state: AgentState) -> dict:
 
     이전 상태(params)는 State에 그대로 있어서, understand가 답("생활비에서")을 보고 빈 칸만 채운다 — 따로 합치지 않는다.
     """
-    answer = interrupt({"prompt": _question(state["missing"]) + "\n(그만두려면 '취소')"})   # 🛑
+    answer = interrupt({"prompt": _question(state["missing"], state["intent"]) + "\n(그만두려면 '취소')"})   # 🛑
     if _classify(answer) == "reject":
         return {"decision": "stop", "missing": None}
     return {"messages": [HumanMessage(content=answer)], "loop": "ask_more",
