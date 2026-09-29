@@ -96,9 +96,21 @@ def _ledger() -> dict:
                      for a in data["accounts"] if a["owner_id"] == CURRENT_USER_ID],
         "cards": [{"name": c["name"], "status": c["status"]}
                   for c in data["cards"] if c["owner_id"] == CURRENT_USER_ID],
-        "requests": [{"id": r["request_id"], "label": INTENTS[r["intent"]]["label"], "status": r["status"]}
+        "requests": [{"id": r["request_id"], "label": INTENTS[r["intent"]]["label"], "summary": _summary(r, data),
+                      "time": r["finished_at"][11:16], "status": r["status"]}
                      for r in data["requests"][-5:]][::-1],
     }
+
+
+def _summary(request: dict, data: dict) -> str:
+    """처리 기록 한 줄 요약. 기록에는 ID만 있으니(별명은 바뀔 수 있음) 지금 이름으로 풀어 쓴다."""
+    names = {a["account_id"]: a["nickname"] for a in data["accounts"]} | {c["card_id"]: c["name"] for c in data["cards"]}
+    d = request["details"]
+    if "amount" in d:
+        return f"{names.get(d['from_account_id'], '?')} → {names.get(d['to_account_id'], '?')} {d['amount']:,}원"
+    if "card_id" in d:
+        return f"{names.get(d['card_id'], '?')} 잠금"
+    return INTENTS[request["intent"]]["label"]
 
 
 def _cleanup_old_ledgers() -> None:
