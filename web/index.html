@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>은행 업무 도우미</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<style>
+  :root {
+    --bg: #f2f4f6; --panel: #ffffff; --line: #e5e8eb; --text: #191f28; --sub: #6b7684; --muted: #8b95a1;
+    --accent: #3182f6; --accent-bg: #e8f3ff; --accent-text: #1b64da; --user-bg: #3182f6; --user-text: #ffffff;
+    --plus: #1a9e6c; --minus: #e5484d; --warn-bg: #fff4e5; --warn-text: #a15c00; --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101113; --panel: #1b1d21; --line: #2c2f34; --text: #eceef0; --sub: #a0a7b0; --muted: #7c838c;
+      --accent: #4c93ff; --accent-bg: #1c2b44; --accent-text: #8ab8ff; --user-bg: #3182f6; --user-text: #ffffff;
+      --plus: #3ecf8e; --minus: #ff6b6f; --warn-bg: #3a2a12; --warn-text: #f0b460;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif; }
+  button { font: inherit; cursor: pointer; }
+  .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; max-width: 1080px; height: 100dvh; margin: 0 auto; padding: 16px; }
+
+  .ledger { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+  .ledger h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .ledger h3 { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--sub); }
+  .row { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+  .row:last-child { border-bottom: 0; }
+  .row .amount { font-weight: 600; font-variant-numeric: tabular-nums; transition: color .6s; }
+  .row .amount.up { color: var(--plus); } .row .amount.down { color: var(--minus); }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--sub); }
+  .badge.locked, .badge.cancelled, .badge.expired { background: var(--warn-bg); color: var(--warn-text); }
+  .badge.completed { background: var(--accent-bg); color: var(--accent-text); }
+  .badge.failed { background: #fdecec; color: var(--minus); }
+  .node { font-size: 12px; color: var(--sub); background: var(--bg); border-radius: 10px; padding: 10px 12px; line-height: 1.6; }
+  .node b { color: var(--text); font-weight: 600; }
+  .ghost { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 9px; }
+  .ghost:hover { background: var(--bg); }
+  .note { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0; }
+
+  .chat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
+  .chat header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+  .chat header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  .chat header span { font-size: 13px; color: var(--sub); }
+  .toggle { display: none; margin-left: auto; }
+  .log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 78%; padding: 11px 14px; border-radius: 16px; line-height: 1.55; white-space: pre-line; font-size: 15px; }
+  .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--user-text); border-bottom-right-radius: 6px; }
+  .msg.bot { align-self: flex-start; background: var(--bg); border-bottom-left-radius: 6px; }
+  .card { align-self: flex-start; width: min(360px, 88%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .card .kind { font-size: 12px; color: var(--accent-text); font-weight: 600; margin-bottom: 6px; }
+  .card .body { white-space: pre-line; line-height: 1.6; font-size: 15px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .primary { flex: 1; background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 11px; font-weight: 600; }
+  .secondary { flex: 1; background: var(--bg); color: var(--text); border: 0; border-radius: 10px; padding: 11px; }
+  .chip { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 7px 13px; font-size: 14px; }
+  .chip:hover { border-color: var(--accent); color: var(--accent-text); }
+  .actions.done button { opacity: .45; pointer-events: none; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 14px; padding: 4px 6px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; }
+  form { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--line); }
+  input[type=text] { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 12px; padding: 12px 14px; font: inherit; font-size: 15px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  form button { background: var(--accent); color: #fff; border: 0; border-radius: 12px; padding: 0 18px; font-weight: 600; }
+  form button:disabled, input:disabled { opacity: .5; }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; padding: 0; gap: 0; }
+    .chat { border-radius: 0; border: 0; }
+    .ledger { display: none; border-radius: 0; border: 0; border-bottom: 1px solid var(--line); max-height: 55dvh; }
+    .app.show-ledger .ledger { display: flex; }
+    .app.show-ledger { grid-template-rows: auto minmax(0, 1fr); }
+    .toggle { display: inline-block; padding: 6px 12px; }
+    .chat header span { display: none; }
+    .msg { max-width: 88%; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="ledger" aria-label="내 장부">
+    <h2>내 장부</h2>
+    <section><h3>계좌</h3><div id="accounts"></div></section>
+    <section><h3>카드</h3><div id="cards"></div></section>
+    <section><h3>최근 처리 기록</h3><div id="requests"><p class="note">승인 화면까지 간 요청이 여기 남아요.</p></div></section>
+    <div class="node" id="node"><b>대기 중</b><br>말을 걸면 그래프가 움직여요.</div>
+    <button class="ghost" id="reset">처음으로 (장부 되돌리기)</button>
+    <p class="note">가상의 장부예요. 방문자마다 따로 있고, 하루가 지나면 지워져요.</p>
+  </aside>
+
+  <main class="chat">
+    <header>
+      <h1>은행 업무 도우미</h1><span>LangGraph · 승인 후에만 실행</span>
+      <button class="ghost toggle" id="toggle">장부</button>
+    </header>
+    <div class="log" id="log" aria-live="polite"></div>
+    <form id="form">
+      <input type="text" id="input" maxlength="300" placeholder="생활비에서 저축으로 10만 원 보내줘" autocomplete="off">
+      <button id="send">보내기</button>
+    </form>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("input"), send = $("send");
+const EXAMPLES = ["내 계좌 전부 보여줘", "생활비에서 저축으로 10만 원 보내줘", "여행 갈 때 쓰는 통장 잔액은?", "카드 잠가줘"];
+const NODE_TEXT = {
+  ask_more: ["ask_more 🛑", "정보가 부족해서 되묻는 중이에요 (루프 1)"],
+  confirm_change: ["confirm_change 🛑", "승인을 기다리는 중이에요. 아직 장부는 그대로예요"],
+};
+let session = null, busy = false, lastBalances = {};
+
+function won(n) { return n.toLocaleString("ko-KR") + "원"; }
+function scroll() { log.scrollTop = log.scrollHeight; }
+
+function bubble(text, who) {
+  const el = document.createElement("div");
+  el.className = "msg " + who;
+  el.textContent = text;
+  log.appendChild(el); scroll();
+  return el;
+}
+
+function cleanPrompt(text, hasChips) {
+  // 버튼이 대신하는 안내는 뺀다: "진행하려면 '예'…", "(그만두려면 '취소')", 후보 목록 글자 (버튼으로 보여주므로)
+  return text.split("\n")
+    .filter((l) => !l.startsWith("진행하려면") && !l.startsWith("(그만두려면") && !(hasChips && l.startsWith("고를 수 있는")))
+    .map((l) => (hasChips && l.includes("이 중에서 골라 주세요:") ? l.split(":")[0] + "." : l))
+    .join("\n");
+}
+
+function card(kind, text, buttons) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `<div class="kind"></div><div class="body"></div><div class="actions"></div>`;
+  el.querySelector(".kind").textContent = kind;
+  el.querySelector(".body").textContent = cleanPrompt(text, buttons.some((b) => b[2] === "chip"));
+  const actions = el.querySelector(".actions");
+  for (const [label, value, style] of buttons) {
+    const b = document.createElement("button");
+    b.className = style; b.textContent = label;
+    b.onclick = () => { actions.classList.add("done"); say(value); };
+    actions.appendChild(b);
+  }
+  log.appendChild(el); scroll();
+}
+
+function renderLedger(ledger) {
+  $("accounts").innerHTML = "";
+  for (const a of ledger.accounts) {
+    const row = document.createElement("div"); row.className = "row";
+    const prev = lastBalances[a.name];
+    const cls = prev === undefined || prev === a.balance ? "" : (a.balance > prev ? "up" : "down");
+    row.innerHTML = `<span></span><span class="amount ${cls}"></span>`;
+    row.children[0].textContent = a.name; row.children[1].textContent = won(a.balance);
+    $("accounts").appendChild(row);
+    lastBalances[a.name] = a.balance;
+    if (cls) setTimeout(() => row.children[1].classList.remove(cls), 2500);
+  }
+  $("cards").innerHTML = "";
+  for (const c of ledger.cards) {
+    const row = document.createElement("div"); row.className = "row";
+    const label = { active: "사용 중", locked: "잠김", reported_lost: "분실 정지" }[c.status] || c.status;
+    row.innerHTML = `<span></span><span class="badge ${c.status}"></span>`;
+    row.children[0].textContent = c.name; row.children[1].textContent = label;
+    $("cards").appendChild(row);
+  }
+  if (ledger.requests.length) {
+    $("requests").innerHTML = "";
+    const text = { completed: "완료", cancelled: "취소", expired: "만료", failed: "실패" };
+    for (const r of ledger.requests) {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<span></span><span class="badge ${r.status}"></span>`;
+      row.children[0].textContent = `${r.id} · ${r.label}`; row.children[1].textContent = text[r.status] || r.status;
+      $("requests").appendChild(row);
+    }
+  } else {
+    $("requests").innerHTML = `<p class="note">승인 화면까지 간 요청이 여기 남아요.</p>`;
+  }
+}
+
+function renderNode(node) {
+  const [name, desc] = NODE_TEXT[node] || ["대기 중", "요청 하나를 끝까지 처리했어요 (END)"];
+  $("node").innerHTML = `<b></b><br><span></span>`;
+  $("node").children[0].textContent = name; $("node").children[2].textContent = desc;
+}
+
+function welcome() {
+  bubble("안녕하세요. 계좌 조회, 이체, 카드 잠금을 말로 도와드려요.\n돈이나 카드 상태가 바뀌는 일은 꼭 확인을 받은 뒤에만 실행해요.", "bot");
+  const box = document.createElement("div"); box.className = "examples";
+  for (const ex of EXAMPLES) {
+    const b = document.createElement("button"); b.className = "chip"; b.textContent = ex;
+    b.onclick = () => say(ex); box.appendChild(b);
+  }
+  log.appendChild(box);
+}
+
+async function api(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const err = new Error(data.detail || "잠시 후 다시 시도해 주세요."); err.status = res.status; throw err; }
+  return data;
+}
+
+async function start() {
+  const data = await api("/api/session");
+  session = data.session_id;
+  renderLedger(data.ledger);
+}
+
+function setBusy(on) {
+  busy = on; input.disabled = on; send.disabled = on;
+  if (!on) input.focus();
+}
+
+async function say(text) {
+  text = text.trim();
+  if (!text || busy) return;
+  bubble(text, "user"); input.value = "";
+  setBusy(true);
+  const typing = document.createElement("div"); typing.className = "typing"; typing.textContent = "생각하는 중…";
+  log.appendChild(typing); scroll();
+  try {
+    let data;
+    try { data = await api("/api/chat", { session_id: session, text }); }
+    catch (e) {
+      if (e.status !== 404 && e.status !== 422) throw e;
+      await start();                                            // 서버가 다시 켜져 세션이 없어짐 → 새로 만들고 한 번 더
+      bubble("연결이 새로 시작됐어요. 장부도 처음 상태예요.", "bot");
+      data = await api("/api/chat", { session_id: session, text });
+    }
+    typing.remove();
+    if (data.type === "confirm") {
+      card("승인이 필요해요", data.text, [["예, 진행할게요", "예", "primary"], ["취소", "취소", "secondary"]]);
+    } else if (data.type === "ask") {
+      card("조금 더 알려 주세요", data.text, [...data.candidates.map((c) => [c, c, "chip"]), ["그만두기", "취소", "chip"]]);
+    } else {
+      bubble(data.text, "bot");
+    }
+    renderLedger(data.ledger);
+    renderNode(data.node);
+  } catch (e) {
+    typing.remove();
+    bubble(e.message, "bot");
+  } finally {
+    setBusy(false);
+  }
+}
+
+$("form").onsubmit = (e) => { e.preventDefault(); say(input.value); };
+$("toggle").onclick = () => $("app").classList.toggle("show-ledger");
+$("reset").onclick = async () => {
+  if (busy) return;
+  try {
+    const data = await api("/api/reset", { session_id: session });
+    lastBalances = {}; renderLedger(data.ledger); renderNode(null);
+    log.innerHTML = ""; welcome();
+  } catch (e) { await start(); log.innerHTML = ""; welcome(); }
+};
+
+start().then(welcome).catch(() => bubble("서버에 연결하지 못했어요. 잠시 후 새로고침해 주세요.", "bot"));
+</script>
+</body>
+</html>
