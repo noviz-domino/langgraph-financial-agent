@@ -418,7 +418,9 @@ def ask_more(state: AgentState) -> dict:
 
     이전 상태(params)는 State에 그대로 있어서, understand가 답("생활비에서")을 보고 빈 칸만 채운다 — 따로 합치지 않는다.
     """
-    answer = interrupt({"prompt": _question(state["missing"], state["intent"]) + "\n(그만두려면 '취소')"})   # 🛑
+    missing = state["missing"]
+    answer = interrupt({"prompt": _question(missing, state["intent"]) + "\n(그만두려면 '취소')",   # 🛑
+                        "kind": "ask", "candidates": missing.get("candidates", [])})   # 웹 화면이 후보를 버튼으로
     if _classify(answer) == "reject":
         return {"decision": "stop", "missing": None}
     return {"messages": [HumanMessage(content=answer)], "loop": "ask_more",
@@ -484,7 +486,7 @@ def confirm_change(state: AgentState) -> dict:
     lines.append(HANDLERS[state["intent"]].describe(plan))
     lines.append("진행하려면 '예', 그만두려면 '취소'라고 말씀해 주세요.")
 
-    answer = interrupt({"prompt": "\n".join(lines)})           # 🛑 여기서 멈춘다. main.py가 답을 받아 재개한다
+    answer = interrupt({"prompt": "\n".join(lines), "kind": "confirm"})   # 🛑 여기서 멈춘다. 답을 받아 재개한다
 
     decision = _classify(answer)
     logger.info("confirm_change: answer=%r decision=%s", answer, decision)
