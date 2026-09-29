@@ -546,7 +546,9 @@ def respond(state: AgentState) -> dict:
 
     if intent == UNSUPPORTED:
         labels = ", ".join(info["label"] for info in INTENTS.values())
-        text = f"죄송해요, 그 요청은 도와드릴 수 없어요. 지금 할 수 있는 일: {labels}"
+        # 인사·잡담도 여기로 온다 → 거절보다 "무엇을 말하면 되는지" 안내 (예시로 바로 따라 할 수 있게)
+        text = (f"저는 은행 업무만 도와드릴 수 있어요. 할 수 있는 일: {labels}\n"
+                "예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘'")
     elif intent == NOT_UNDERSTOOD:
         text = "요청을 이해하지 못했어요. 다시 말씀해 주세요."
     elif decision == "stop":

@@ -48,10 +48,12 @@ def show_result(state: dict) -> bool:
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
+    logging.getLogger("google_genai").setLevel(logging.ERROR)   # AFC 안내 경고 — 동작과 무관해서 사용자 화면에서 숨긴다
     graph = build_graph()
     config = {"configurable": {"thread_id": f"cli-{uuid.uuid4().hex[:8]}"}}   # 실행할 때마다 새 대화
 
-    print("은행 업무 도우미입니다. 끝내려면 '종료'를 입력하세요.")
+    print("은행 업무 도우미입니다. 예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘', '생활비 카드 잠가줘'")
+    print("끝내려면 '종료'를 입력하세요.")
     waiting = False                                             # 승인 답을 기다리는 중인가
     while True:
         try:
