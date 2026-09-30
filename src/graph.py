@@ -621,8 +621,12 @@ def respond(state: AgentState) -> dict:
 
 
 # ── 그래프 조립 ──────────────────────────────────────────────────
-def build_graph(checkpointer=None):
-    """노드와 Edge를 등록하고 Checkpointer와 함께 compile한다."""
+def build_graph(checkpointer=None, use_checkpointer: bool = True):
+    """노드와 Edge를 등록하고 Checkpointer와 함께 compile한다.
+
+    use_checkpointer=False는 LangGraph 서버(Studio의 langgraph dev)용 — 서버가 자기 저장소로 멈춘 상태를 저장하므로
+    우리 것을 끼우지 않는다. main.py·web.py는 기본값 그대로 InMemorySaver를 쓴다.
+    """
     missing = READ_INTENTS - READ_TASKS.keys()                  # intents.py와 functions.py의 약속 확인
     if missing:
         raise RuntimeError(f"READ_TASKS에 조회 함수가 없는 intent가 있습니다: {sorted(missing)}")
@@ -645,6 +649,8 @@ def build_graph(checkpointer=None):
     builder.add_edge("record_result", "respond")
     builder.add_edge("respond", END)
 
+    if not use_checkpointer:
+        return builder.compile()
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 

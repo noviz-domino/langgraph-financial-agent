@@ -34,3 +34,6 @@ data/*.tmp
 
 # 웹 방문자별 장부 복사본
 data/ledgers/
+
+# LangGraph Studio 로컬 서버의 저장소
+.langgraph_api/

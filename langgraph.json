@@ -1,0 +1,6 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "bank_agent": "./src/studio.py:graph"
+  }
+}
