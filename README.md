@@ -8,6 +8,30 @@
 
 KDT 과제 미니 프로젝트 · Python 3.13 · LangGraph 1.2 · LangChain 1.4 · Gemini `gemini-3.5-flash-lite`
 
+**직접 써 보기: https://noviz-bank.duckdns.org** (가상의 장부예요. 방문자마다 따로 있고 "처음으로"를 누르면 되돌아가요. Gemini 무료 등급이라 호출 횟수가 제한돼 있어요)
+
+---
+
+## 실행 화면
+
+**이체 요청 → 승인 카드.** 장부는 아직 그대로이고, 그래프는 `confirm_change`에서 멈춰 승인을 기다린다.
+
+![이체 승인 카드](docs/images/02-confirm.png)
+
+**승인 → 실행.** "예"를 누르면 `apply_change → record_result`까지 진행하고 왼쪽 잔액이 바뀐다 (생활비 520,000 → 420,000, 저축 1,850,000 → 1,950,000).
+
+![승인 후 잔액 변화](docs/images/03-done.png)
+
+**정보가 부족하면 되묻기.** "카드 잠가줘"에는 어느 카드인지 몰라 `ask_more`에서 멈추고 후보를 버튼으로 보여 준다. 고르면 다시 승인 카드로 이어진다.
+
+| 되묻기 (`ask_more`) | 고른 뒤 승인 (`confirm_change`) |
+|---|---|
+| ![되묻기](docs/images/04-ask.png) | ![카드 잠금 승인](docs/images/05-card-confirm.png) |
+
+| 첫 화면 | 어두운 모드 | 폰 화면 |
+|---|---|---|
+| ![첫 화면](docs/images/01-home.png) | ![어두운 모드](docs/images/06-dark.png) | ![폰 화면](docs/images/07-mobile.png) |
+
 ---
 
 ## 실행 방법
