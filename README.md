@@ -177,6 +177,7 @@ START → understand ─┬─ 정보 부족 → ask_more 🛑 ──(답)──
 | `src/graph.py` | State, 노드 8개, 조건부 Edge 4개. LLM은 `understand` 한 곳 |
 | `src/web.py`, `web/index.html` | 웹 서버(FastAPI)와 채팅 화면. 그래프는 그대로, 입구만 다름 |
 | `src/scenarios.py` | 대화 시나리오 확인 (그래프 + 업무 코드 + 저장을 함께) |
+| `src/evaluation.py` | LLM(`understand`) 평가 — Golden set을 LangSmith Experiment로 채점, 같은 사례 반복 가능 |
 | `src/intents.py` | intent와 slot의 유일한 정의처 |
 | `src/functions.py` | 업무 코드 — 조회 함수, 이체·카드 잠금 Handler(`validate`·`describe`·`apply`) |
 | `src/data_store.py` | 장부 읽기·저장의 유일한 통로 (무결성 검사 + atomic write + 재시도) |
@@ -191,6 +192,8 @@ uv run python src/data_store.py   # 저장 통로 10/10 (API 없음, 작업용 �
 uv run python src/functions.py    # 업무 코드 31/31 (API 없음)
 uv run python src/graph.py        # 그래프 모양을 Mermaid로 출력 (API 없음)
 uv run python src/scenarios.py    # 대화 시나리오 47개 (Gemini 41회 호출 + 가짜 LLM 시나리오)
+uv run python src/evaluation.py --offline     # 채점 함수 확인 8/8 (API 없음)
+uv run python src/evaluation.py --repeat 5    # LangSmith Experiment (사례 4개 × 5번 = Gemini 20회, LANGSMITH_API_KEY 필요)
 ```
 
 ---
