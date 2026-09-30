@@ -5,7 +5,7 @@
 
 공개할 때를 위한 장치 (2026-09-29, feat/web)
     방문자마다 장부 따로   세션마다 data/ledgers/<세션>.json. "처음으로"로 원본 상태로
-    호출 횟수 제한        세션마다 10분에 30번, 서버 전체 하루 500번 (Gemini API 비용 보호)
+    호출 횟수 제한        세션마다 1분에 3번·10분에 10번, 서버 전체 하루 50번 (Gemini API 비용 보호)
     입력 길이 제한        300자
 
 실행:  uv run python -m uvicorn web:app --app-dir src --port 8000   → http://localhost:8000
@@ -36,8 +36,9 @@ logging.getLogger("google_genai").setLevel(logging.ERROR)     # AFC 안내 경�
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_TEXT = 300
-SESSION_LIMIT, SESSION_WINDOW = 30, 600                        # 세션마다 10분에 30번
-DAILY_LIMIT = 500                                              # 서버 전체 하루 500번
+SESSION_LIMITS = [(3, 60), (10, 600)]                          # 세션마다 (몇 번, 몇 초 안에) — 1분에 3번, 10분에 10번
+SESSION_WINDOW = max(window for _, window in SESSION_LIMITS)    # 이보다 오래된 요청 시각은 버린다
+DAILY_LIMIT = 50                                               # 서버 전체 하루 50번
 LEDGER_TTL = 24 * 3600                                         # 하루 지난 방문자 장부는 지운다
 
 app = FastAPI(title="은행 업무 도우미")
@@ -70,7 +71,7 @@ def _check_limits(session_id: str) -> None:
     recent = _recent[session_id]
     while recent and now - recent[0] > SESSION_WINDOW:
         recent.popleft()
-    if len(recent) >= SESSION_LIMIT:
+    if any(sum(now - t <= window for t in recent) >= limit for limit, window in SESSION_LIMITS):
         raise HTTPException(429, "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
     if _daily["day"] != date.today():
         _daily.update(day=date.today(), count=0)
