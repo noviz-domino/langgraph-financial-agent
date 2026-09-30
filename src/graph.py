@@ -33,7 +33,7 @@ from data_store import DataStoreError
 from config import load_env
 from functions import HANDLERS, NAME_LISTS, READ_TASKS, josa, my_account_names, my_card_names, new_request
 from integrity import KST
-from intents import (INTENTS, KIND_LABELS, LLM_BUSY, NAME_SLOTS, NOT_UNDERSTOOD, READ_INTENTS, SLOTS, UNCERTAIN, UNSUPPORTED,
+from intents import (INTENTS, KIND_LABELS, LLM_BUSY, MULTIPLE_REQUESTS, NAME_SLOTS, NOT_UNDERSTOOD, READ_INTENTS, SLOTS, UNCERTAIN, UNSUPPORTED,
                      WRITE_INTENTS)
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,8 @@ SYSTEM_PROMPT = """너는 은행 앱의 요청 해석기다. 사용자의 가장
    ("이어받을 계좌: 생활비"일 때 "저축으로 3만 원" → 출금 계좌 = 생활비)
    "이어받을 계좌: 없음"이면 가리키는 말("거기서", "그 계좌")이 있어도 옮기지 않고 비워 둔다.
 9. "두 번째 거"처럼 순서로 고르면 이전 상태의 "보여준 후보" 순서를 따른다.
+10. 실행할 업무가 둘 이상이면(이체 두 번, 이체 + 카드 잠금 등) multiple을 true로 한다.
+   계좌 여러 개를 한 번에 조회하는 것은 업무 하나다.
 </규칙>"""
 
 
@@ -246,6 +248,8 @@ def _build_schema(account_names: list[str], card_names: list[str]):
                 description="금액. 원 단위 정수('10만 원'은 100000). 음수도 그대로. 이전 상태에도, 이번 말에도 없으면 비움")),
         card=(CardName | None, Field(default=None,
               description="대상 카드 이름. 이전 상태에도, 이번 말에도 없으면 비움")),
+        multiple=(bool, Field(default=False,
+                  description="이번 말에 실행할 업무가 둘 이상이면 true (계좌 여러 개 조회는 하나)")),
         reason=(str, Field(description="판단 근거 한 문장")),
     )
 
@@ -296,6 +300,14 @@ def understand(state: AgentState) -> dict:
         if state.get("loop") == "revise":                       # 수정 해석에 실패 → 승인을 기다리던 요청은 잃지 않는다
             return {**_turn_reset(state), "decision": "unclear"}
         return {"intent": failed_intent, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
+
+    # 한 말에 업무가 여럿이면 아무것도 하지 않고 하나씩 말해 달라고 한다.
+    # 앞의 것만 처리하면 사용자는 나머지도 처리된 줄 안다 (2026-09-30 직접 써 보다 발견)
+    if parsed.multiple:
+        logger.info("understand: 업무 여러 개 — %s", parsed.reason)
+        if state.get("loop") == "revise":                       # 승인을 기다리던 요청은 잃지 않는다
+            return {**_turn_reset(state), "decision": "unclear"}
+        return {"intent": MULTIPLE_REQUESTS, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
 
     # 고른 intent에 해당하는 slot만 남기고 나머지 칸은 버린다 (intents.py가 기준)
     info = INTENTS.get(parsed.intent, {})                       # unsupported면 빈 dict → slot 없음
@@ -578,6 +590,9 @@ def respond(state: AgentState) -> dict:
                 "예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘'")
     elif intent == NOT_UNDERSTOOD:
         text = "요청을 이해하지 못했어요. 다시 말씀해 주세요."
+    elif intent == MULTIPLE_REQUESTS:
+        text = ("한 번에 한 가지 요청만 처리할 수 있어요. 아무것도 실행하지 않았어요.\n"
+                "하나씩 말씀해 주세요. 예) '생활비에서 저축으로 10만 원 보내줘'")
     elif intent == LLM_BUSY:
         text = "지금 AI 서버가 바빠요. 잠시 후 같은 말을 다시 보내 주세요."
     elif decision == "stop":
