@@ -26,7 +26,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 import data_store
-from config import ConfigError
+from config import ConfigError, load_env
 from functions import CURRENT_USER_ID
 from graph import build_graph
 from intents import INTENTS
@@ -42,6 +42,10 @@ DAILY_LIMIT = 50                                               # 서버 전체 �
 LEDGER_TTL = 24 * 3600                                         # 하루 지난 방문자 장부는 지운다
 
 app = FastAPI(title="은행 업무 도우미")
+try:
+    load_env()                                                 # 첫 요청 전에 — LangSmith는 Tracing 여부를 처음 한 번만 읽고 기억한다
+except ConfigError:
+    logger.exception("시작: API 키 설정 문제 (채팅 요청 때 다시 안내)")
 agent = build_graph()
 
 _threads: dict[str, str] = {}                                  # 세션 → 지금 대화의 thread_id ("처음으로"면 새로)

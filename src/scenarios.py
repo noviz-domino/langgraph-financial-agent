@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 import data_store
+from config import load_env
 import graph as g
 from functions import _next_id
 from integrity import check_integrity
@@ -78,6 +79,7 @@ def run() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
     logging.getLogger("graph").setLevel(logging.INFO)          # 판단 근거 로그만 보이게 (라이브러리는 경고 이상만)
     data_store.reset()                                          # 처음부터 원본 장부로 — CLI로 써 본 변경이 결과에 섞이지 않게
+    load_env()                                                  # 첫 invoke 전에 (LangSmith Tracing 여부를 처음 한 번만 읽음)
     app = g.build_graph()
 
     def ask(text: str, thread_id: str):                         # 새 요청 (멈춰 있던 질문이 있으면 버리고 처음부터)

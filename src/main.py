@@ -17,6 +17,7 @@ import uuid
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
+from config import load_env
 from graph import build_graph
 
 EXIT_WORDS = {"종료", "exit", "quit"}
@@ -49,6 +50,7 @@ def show_result(state: dict) -> bool:
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
     logging.getLogger("google_genai").setLevel(logging.ERROR)   # AFC 안내 경고 — 동작과 무관해서 사용자 화면에서 숨긴다
+    load_env()                                                  # 첫 invoke 전에 — LangSmith는 Tracing 여부를 처음 한 번만 읽고 기억한다
     graph = build_graph()
     config = {"configurable": {"thread_id": f"cli-{uuid.uuid4().hex[:8]}"}}   # 실행할 때마다 새 대화
 
