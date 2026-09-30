@@ -81,6 +81,21 @@ uv run python -m uvicorn web:app --app-dir src --port 8000
 - 호출 제한: 방문자마다 1분에 3번·10분에 10번, 서버 전체 하루 50번, 한 번에 300자 (API 비용 보호)
 - Windows에서 `uvicorn` 실행 파일이 앱 제어 정책에 막히면 위처럼 `python -m uvicorn`으로 실행한다
 
+### 5. LangGraph Studio (선택)
+
+그래프를 그림으로 띄워 놓고 실행해 볼 수 있다. 노드가 차례로 켜지며 지나가고, 노드마다 State가 보이며, `confirm_change`에서 멈추면 화면에서 바로 "예"로 이어 갈 수 있다.
+
+```bash
+PYTHONUTF8=1 uv run langgraph dev
+```
+
+나오는 `Studio UI` 링크를 브라우저로 연다 (LangSmith 로그인 필요).
+
+- 입구는 `src/studio.py` — 다른 입구와 같은 `build_graph()`를 쓰되, 멈춘 상태는 LangGraph 서버가 저장하므로 checkpointer 없이 compile한다 (`main.py`·`web.py`는 그대로 `InMemorySaver`)
+- 장부는 `main.py`와 같은 작업용 복사본(`bank_data.json`)을 쓴다
+- `PYTHONUTF8=1`: 한국어 Windows에서 `langgraph-api`가 자기 파일을 읽다가 인코딩 오류가 난다
+- 개발용 도구라 배포 서버에는 설치하지 않는다 (`uv sync --locked --no-dev`)
+
 ---
 
 ## 구현한 기능
