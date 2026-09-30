@@ -79,5 +79,6 @@ NAME_SLOTS = [slot for slot, info in SLOTS.items() if info["kind"]]   # 이름�
 
 # ── INTENTS 표 밖의 특별한 값 ─────────────────────────────────────
 UNSUPPORTED = "unsupported"          # intent — 이 에이전트가 처리할 수 없는 요청 (LLM이 고른다)
-NOT_UNDERSTOOD = "not_understood"    # intent — LLM 호출이 실패했거나 형식을 어겼다 (코드가 넣는다)
+NOT_UNDERSTOOD = "not_understood"    # intent — LLM이 형식을 어겼거나 알 수 없는 이유로 실패했다 (코드가 넣는다)
+LLM_BUSY = "llm_busy"                # intent — AI 서버가 바쁘거나(503·429) 시간 안에 답하지 않았다 (코드가 넣는다)
 UNCERTAIN = "uncertain"              # slot — 계좌·카드를 말했지만 목록 중 어느 것인지 모른다 (LLM이 고른다)

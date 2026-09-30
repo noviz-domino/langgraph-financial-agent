@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Annotated, Literal, TypedDict
 
+import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,12 +33,14 @@ from data_store import DataStoreError
 from config import load_env
 from functions import HANDLERS, NAME_LISTS, READ_TASKS, josa, my_account_names, my_card_names, new_request
 from integrity import KST
-from intents import (INTENTS, KIND_LABELS, NAME_SLOTS, NOT_UNDERSTOOD, READ_INTENTS, SLOTS, UNCERTAIN, UNSUPPORTED,
+from intents import (INTENTS, KIND_LABELS, LLM_BUSY, NAME_SLOTS, NOT_UNDERSTOOD, READ_INTENTS, SLOTS, UNCERTAIN, UNSUPPORTED,
                      WRITE_INTENTS)
 
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-3.5-flash-lite"
+LLM_TIMEOUT_SECONDS = 20    # 한 번 보낼 때 기다리는 최대 시간. 넘으면 실패로 보고 다시 보낸다
+LLM_ATTEMPTS = 2            # 처음 1번 + 재시도 1번 (SDK 기본값 6은 무료 등급이 바쁠 때 1분 넘게 기다리게 함)
 APPROVAL_TTL = timedelta(minutes=5)       # 승인 유효 시간 — 처리안을 만든 뒤 이 시간이 지난 "예"는 실행하지 않는다 (Step 5 결정 4)
 
 # 승인 답 — 글자가 정확히 같을 때만 인정한다 (앞뒤 공백·문장부호는 무시). 그 밖의 답은 수정 요청으로 본다 (Step 8)
@@ -209,7 +212,13 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     """
     load_env()
     # temperature는 주지 않는다 — 이 모델은 무시하고 경고만 낸다. 답이 흔들려도 되도록 중요한 판단은 코드가 한다
-    return ChatGoogleGenerativeAI(model=MODEL_NAME)
+    # 재시도는 SDK에 맡긴다 — 503·429·타임아웃이면 잠깐 기다렸다 다시 보낸다. max_retries는 "재시도 횟수"가 아니라 "총 시도 횟수"
+    return ChatGoogleGenerativeAI(model=MODEL_NAME, max_retries=LLM_ATTEMPTS, timeout=LLM_TIMEOUT_SECONDS)
+
+
+def _is_busy(error: Exception) -> bool:
+    """AI 서버 쪽 사정(과부하·요청 한도·시간 초과)인가? 사용자가 다시 말할 필요 없이 잠시 후 그대로 보내면 되는 실패."""
+    return getattr(error, "is_retryable", False) or isinstance(error, httpx.TimeoutException)
 
 
 def _build_schema(account_names: list[str], card_names: list[str]):
@@ -277,13 +286,16 @@ def understand(state: AgentState) -> dict:
         # 외부(API) 경계만 감싼다 — 네트워크 오류, 형식 위반 같은 LLM 쪽 실패.
         # 우리 코드의 버그까지 감싸지 않도록 LLM 호출 한 줄만 try 안에 둔다.
         parsed = llm.invoke([SystemMessage(content=system), utterance])
-    except Exception:
+    except Exception as e:
         logger.exception("understand: LLM 호출 또는 형식 검증에 실패했습니다")   # 오류와 traceback을 함께 기록 (29번)
         parsed = None
+        failed_intent = LLM_BUSY if _is_busy(e) else NOT_UNDERSTOOD
+    else:
+        failed_intent = NOT_UNDERSTOOD                          # 호출은 됐지만 구조화 결과가 비어서 옴
     if parsed is None:                                          # 실패했거나 구조화 결과가 비어서 온 경우
         if state.get("loop") == "revise":                       # 수정 해석에 실패 → 승인을 기다리던 요청은 잃지 않는다
             return {**_turn_reset(state), "decision": "unclear"}
-        return {"intent": NOT_UNDERSTOOD, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
+        return {"intent": failed_intent, "params": {}, "inferred": [], **_turn_reset(state), "plan": None}
 
     # 고른 intent에 해당하는 slot만 남기고 나머지 칸은 버린다 (intents.py가 기준)
     info = INTENTS.get(parsed.intent, {})                       # unsupported면 빈 dict → slot 없음
@@ -566,6 +578,8 @@ def respond(state: AgentState) -> dict:
                 "예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘'")
     elif intent == NOT_UNDERSTOOD:
         text = "요청을 이해하지 못했어요. 다시 말씀해 주세요."
+    elif intent == LLM_BUSY:
+        text = "지금 AI 서버가 바빠요. 잠시 후 같은 말을 다시 보내 주세요."
     elif decision == "stop":
         text = "알겠어요, 요청을 그만둘게요."
     elif state.get("missing"):                                  # 되묻기를 MAX_ASKS번 해도 채우지 못함
