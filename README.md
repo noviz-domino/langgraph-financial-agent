@@ -32,6 +32,12 @@ KDT 과제 미니 프로젝트 · Python 3.13 · LangGraph 1.2 · LangChain 1.4 
 |---|---|---|
 | ![첫 화면](docs/images/01-home.png) | ![어두운 모드](docs/images/06-dark.png) | ![폰 화면](docs/images/07-mobile.png) |
 
+**LangGraph Studio로 본 그래프.** 같은 이체를 Studio에서 실행하면 노드를 차례로 지나 `confirm_change`에서 멈추고(`INTERRUPT`, 승인 질문), "예"로 이어 가면 `apply_change → record_result → respond`까지 간다. 루프 두 개(되묻기 `ask_more → understand`, 수정 `confirm_change → understand`)도 그림에 그대로 보인다.
+
+| 승인 대기 (`interrupt`) | "예"로 이어 간 뒤 |
+|---|---|
+| ![Studio 승인 대기](docs/images/08-studio-interrupt.png) | ![Studio 이어 가기](docs/images/09-studio-resume.png) |
+
 ---
 
 ## 실행 방법
