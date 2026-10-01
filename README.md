@@ -214,7 +214,7 @@ uv run python src/functions.py    # 업무 코드 31/31 (API 없음)
 uv run python src/graph.py        # 그래프 모양을 Mermaid로 출력 (API 없음)
 uv run python src/scenarios.py    # 대화 시나리오 47개 (Gemini 41회 호출 + 가짜 LLM 시나리오)
 uv run python src/evaluation.py --offline     # 채점 함수 확인 8/8 (API 없음)
-uv run python src/evaluation.py --repeat 5    # LangSmith Experiment (사례 4개 × 5번 = Gemini 20회, LANGSMITH_API_KEY 필요)
+uv run python src/evaluation.py --repeat 5    # LangSmith Experiment (사례 7개 × 5번 = Gemini 35회, LANGSMITH_API_KEY 필요)
 ```
 
 ---
