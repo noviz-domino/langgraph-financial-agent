@@ -254,11 +254,15 @@ HANDLERS = {
 
 # ── 단독 실행: 조회 함수·Handler 확인 (API 호출 없음) ──────────────
 def _self_check() -> None:
-    """구현계획 Step 2·5·6·7의 업무 코드 완료 기준을 확인한다. 작업용 복사본을 읽기만 하고, 바꾸는 확인은 복사한 dict에서."""
-    import copy
-    from data_store import load                               # 확인할 때만 필요해서 여기서 불러온다. save는 불러오지 않는다
+    """구현계획 Step 2·5·6·7의 업무 코드 완료 기준을 확인한다. 원본을 읽기만 하고, 바꾸는 확인은 복사한 dict에서.
 
-    data = load()
+    작업용 복사본이 아니라 원본을 읽는다 — 기대값(생활비 520,000원 등)이 원본 기준이라,
+    main.py로 이체를 한 번만 해 봐도 복사본을 읽는 확인은 실패했다 (2026-10-01).
+    """
+    import copy
+    from data_store import ORIGINAL_PATH, _read_json         # 확인할 때만 필요해서 여기서 불러온다. save는 불러오지 않는다
+
+    data = _read_json(ORIGINAL_PATH)
     before = copy.deepcopy(data)                              # 조회 전 상태를 통째로 떠둠 (나중에 안 바뀌었는지 비교)
     results = []                                              # (확인 내용, 통과 여부) 목록
 
