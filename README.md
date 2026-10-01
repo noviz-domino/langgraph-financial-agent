@@ -224,9 +224,9 @@ uv run python src/evaluation.py --repeat 5    # LangSmith Experiment (사례 4�
 | 문서 | 내용 |
 |---|---|
 | [docs/기획서.md](docs/기획서.md) | 목표와 범위 |
-| [docs/설계초안.md](docs/설계초안.md) | 코딩 전에 그린 워크플로우 초안과 검토 |
+| [docs/설계초안.md](docs/설계초안.md) | 설계 초안(v1 워크플로우) — 흐름, State, 분기 조건, 구성 근거, 처음 구상에서의 과정 |
 | [docs/설계서.md](docs/설계서.md) | 현재 설계 — 흐름, State, 데이터, 규칙 |
-| [docs/설계변경기록.md](docs/설계변경기록.md) | 초안에서 무엇이 왜 바뀌었나 |
+| [docs/설계변경기록.md](docs/설계변경기록.md) | 설계 초안에서 무엇이 왜 바뀌었나 (A장은 처음 구상 → 초안 과정) |
 | [docs/구현계획.md](docs/구현계획.md) | 단계별 작업과 완료 기준 |
 | [docs/코드읽기가이드.md](docs/코드읽기가이드.md) | 파일별로 코드를 읽는 순서와 확인 질문 |
 | [devlog/](devlog/) | 날짜별 개발일지 |
