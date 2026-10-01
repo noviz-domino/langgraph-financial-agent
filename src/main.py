@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from config import load_env
-from graph import build_graph
+from graph import EXAMPLE_REQUEST, build_graph
 
 EXIT_WORDS = {"종료", "exit", "quit"}
 
@@ -54,7 +54,7 @@ def main() -> None:
     graph = build_graph()
     config = {"configurable": {"thread_id": f"cli-{uuid.uuid4().hex[:8]}"}}   # 실행할 때마다 새 대화
 
-    print("은행 업무 도우미입니다. 예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘', '생활비 카드 잠가줘'")
+    print(f"은행 업무 도우미입니다. 예) '내 계좌 전부 보여줘', {EXAMPLE_REQUEST}, '생활비 카드 잠가줘'")
     print("끝내려면 '종료'를 입력하세요.")
     waiting = False                                             # 승인 답을 기다리는 중인가
     while True:

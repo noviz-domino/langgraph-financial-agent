@@ -51,6 +51,45 @@ REJECT_WORDS = {"취소", "아니요", "아니오", "거절", "그만", "안 할
 MAX_ASKS = 3                              # 되묻기(루프 1) 최대 횟수 — 넘으면 요청을 멈춘다
 MAX_REVISIONS = 5                         # 승인 전 수정(루프 2) 최대 횟수 (구현계획 Step 8)
 
+# ── 안내 문장 (정해진 틀) ─────────────────────────────────────────
+# 그래프가 사용자에게 보여주는 문장을 한 곳에 모은다. {이름} 자리는 쓰는 곳에서 .format()으로 채운다.
+# 업무마다 다른 문장(잔액 부족, 이체 완료 등)은 여기가 아니라 functions.py의 각 Handler에 있다.
+EXAMPLE_REQUEST = "'생활비에서 저축으로 10만 원 보내줘'"
+
+# respond — intent만 보고 정해지는 답 (업무를 처리하지 못한 경우)
+INTENT_REPLIES = {
+    # 인사·잡담도 여기로 온다 → 거절보다 "무엇을 말하면 되는지" 안내 (예시로 바로 따라 할 수 있게)
+    UNSUPPORTED: "저는 은행 업무만 도와드릴 수 있어요. 할 수 있는 일: {labels}\n"
+                 "예) '내 계좌 전부 보여줘', " + EXAMPLE_REQUEST,
+    NOT_UNDERSTOOD: "요청을 이해하지 못했어요. 다시 말씀해 주세요.",
+    MULTIPLE_REQUESTS: "한 번에 한 가지 요청만 처리할 수 있어요. 아무것도 실행하지 않았어요.\n"
+                       "하나씩 말씀해 주세요. 예) " + EXAMPLE_REQUEST,
+    LLM_BUSY: "지금 AI 서버가 바빠요. 잠시 후 같은 말을 다시 보내 주세요.",
+}
+# respond — 승인·되묻기에서 끝난 경우 (decision별)
+DECISION_REPLIES = {
+    "stop": "알겠어요, 요청을 그만둘게요.",
+    "reject": "{label}{eul} 취소했어요. 아무것도 바뀌지 않았어요.",
+    "too_many": f"수정이 {MAX_REVISIONS}번을 넘어 요청을 끝냈어요. 아무것도 바뀌지 않았어요. 처음부터 다시 말씀해 주세요.",
+    "expired": f"승인 시간({int(APPROVAL_TTL.total_seconds() // 60)}분)이 지나 안전을 위해 실행하지 않았어요. 다시 요청해 주세요.",
+}
+ASK_LIMIT_REPLY = "여러 번 여쭤봐도 필요한 정보를 알 수 없어 요청을 멈출게요. 처음부터 다시 말씀해 주세요."
+
+# ask_more — 되묻기
+ASK_UNCERTAIN = "말씀하신 {label}{eul} 찾지 못했어요. 이 중에서 골라 주세요: {candidates}"
+ASK_MISSING = "{task}{task_eul} 하려면 {needed}{needed_eul} 알려 주세요."
+ASK_CANDIDATES = "\n고를 수 있는 {label}: {candidates}"
+ASK_STOP_HINT = "\n(그만두려면 '취소')"
+
+# confirm_change — 승인 화면
+CONFIRM_UNCLEAR = "'예' 또는 '취소'로 답해 주세요. 바꾸고 싶은 내용이 있으면 말씀해 주세요."
+CONFIRM_REVISE_REJECTED = "{reason}\n그래서 처음 내용 그대로 여쭤볼게요."
+CONFIRM_HINT = "진행하려면 '예', 그만두려면 '취소'라고 말씀해 주세요."
+
+# apply_change — 실행 직전에 멈춘 사유
+APPLY_CHANGED = "승인하시는 사이 상황이 바뀌어 실행하지 않았어요.\n{reason}"
+APPLY_SAVE_FAILED = "장부에 저장하지 못해 실행하지 않았어요. 잠시 후 다시 시도해 주세요."
+
 _clock_offset = timedelta(0)              # 테스트용 — 시각을 앞으로 돌려 만료를 흉내 낸다 (시계 주입)
 
 
@@ -60,6 +99,11 @@ def _now() -> datetime:
 
 
 # ── State ────────────────────────────────────────────────────────
+# decision 값 — 노드끼리 주고받는 약속이라 허용 값을 여기 한 곳에 적는다 (오타가 나면 편집기가 잡는다)
+Decision = Literal["approve", "reject", "expired", "revise", "unclear", "revise_rejected", "too_many", "stop"]
+Answer = Literal["approve", "reject", "revise"]          # 승인 답을 분류한 결과 (_classify)
+
+
 class AgentState(TypedDict, total=False):
     """노드들이 주고받는 데이터. 다른 노드가 읽는 칸만 둔다 (판단 근거 reason은 로그로).
 
@@ -84,9 +128,9 @@ class AgentState(TypedDict, total=False):
     inferred: list[dict]
     result: dict | None
     plan: dict | None
-    decision: str | None
+    decision: Decision | None
     missing: dict | None
-    loop: str | None
+    loop: Literal["ask_more", "revise"] | None
     ask_count: int
     revision_count: int
 
@@ -385,12 +429,12 @@ def _question(missing: dict, intent: str) -> str:
     candidates = ", ".join(missing.get("candidates", []))
     if missing["notice"] == "uncertain":
         label = KIND_LABELS[missing["kind"]]
-        return f"말씀하신 {label}{josa(label, '을/를')} 찾지 못했어요. 이 중에서 골라 주세요: {candidates}"
+        return ASK_UNCERTAIN.format(label=label, eul=josa(label, "을/를"), candidates=candidates)
     task = INTENTS[intent]["label"]
     needed = ", ".join(SLOTS[slot]["role"] for slot in missing["slots"])
-    text = f"{task}{josa(task, '을/를')} 하려면 {needed}{josa(needed, '을/를')} 알려 주세요."
+    text = ASK_MISSING.format(task=task, task_eul=josa(task, "을/를"), needed=needed, needed_eul=josa(needed, "을/를"))
     if candidates:
-        text += f"\n고를 수 있는 {KIND_LABELS[missing['kind']]}: {candidates}"
+        text += ASK_CANDIDATES.format(label=KIND_LABELS[missing["kind"]], candidates=candidates)
     return text
 
 
@@ -443,7 +487,7 @@ def ask_more(state: AgentState) -> dict:
     이전 상태(params)는 State에 그대로 있어서, understand가 답("생활비에서")을 보고 빈 칸만 채운다 — 따로 합치지 않는다.
     """
     missing = state["missing"]
-    answer = interrupt({"prompt": _question(missing, state["intent"]) + "\n(그만두려면 '취소')",   # 🛑
+    answer = interrupt({"prompt": _question(missing, state["intent"]) + ASK_STOP_HINT,   # 🛑
                         "kind": "ask", "candidates": missing.get("candidates", [])})   # 웹 화면이 후보를 버튼으로
     if _classify(answer) == "reject":
         return {"decision": "stop", "missing": None}
@@ -479,7 +523,7 @@ def plan_change(state: AgentState) -> dict:
 
 
 # ── confirm_change: 승인 받기 (🛑 interrupt, 루프 2의 입구) ─────
-def _classify(answer: str) -> str:
+def _classify(answer: str) -> Answer:
     """승인 답을 approve / reject / revise로. 정해진 단어와 글자가 정확히 같을 때만 승인·거절 (LLM 안 씀).
 
     그 밖의 답은 수정 요청으로 보고 understand가 해석한다 — 바뀐 게 없으면 다시 묻는다 (Step 8).
@@ -501,14 +545,14 @@ def confirm_change(state: AgentState) -> dict:
     plan, decision = state["plan"], state.get("decision")
     lines = []
     if decision == "unclear":                                   # 수정 요청이었는데 바뀐 게 없음
-        lines.append("'예' 또는 '취소'로 답해 주세요. 바꾸고 싶은 내용이 있으면 말씀해 주세요.")
+        lines.append(CONFIRM_UNCLEAR)
     elif decision == "revise_rejected":                         # 수정안이 검사에서 걸림 → 이전 내용으로 다시 묻기
-        lines.append(f"{state['result']['reason']}\n그래서 처음 내용 그대로 여쭤볼게요.")
+        lines.append(CONFIRM_REVISE_REJECTED.format(reason=state["result"]["reason"]))
     notes = _interpretation_notes(state.get("inferred") or [])
     if notes:
         lines.append(notes)
     lines.append(HANDLERS[state["intent"]].describe(plan))
-    lines.append("진행하려면 '예', 그만두려면 '취소'라고 말씀해 주세요.")
+    lines.append(CONFIRM_HINT)
 
     answer = interrupt({"prompt": "\n".join(lines), "kind": "confirm"})   # 🛑 여기서 멈춘다. 답을 받아 재개한다
 
@@ -538,8 +582,7 @@ def apply_change(state: AgentState) -> dict:
     data = data_store.load()
     plan, reason = handler.validate(state["params"], data)
     if reason:
-        return {"result": {"notice": "rejected",
-                           "reason": f"승인하시는 사이 상황이 바뀌어 실행하지 않았어요.\n{reason}"}}
+        return {"result": {"notice": "rejected", "reason": APPLY_CHANGED.format(reason=reason)}}
 
     message, refs = handler.apply(plan, data, _now())
     new_request(data, intent, {**handler.details(plan), **refs}, "completed", None, old_plan["created_at"], _now())
@@ -547,8 +590,7 @@ def apply_change(state: AgentState) -> dict:
         data_store.save(data)                                   # 무결성 검사(세 번째 안전망) + atomic write (+ 재시도)
     except DataStoreError:
         logger.exception("apply_change: 저장 실패 — 파일은 이전 상태 그대로")
-        return {"result": {"notice": "rejected",
-                           "reason": "장부에 저장하지 못해 실행하지 않았어요. 잠시 후 다시 시도해 주세요."}}
+        return {"result": {"notice": "rejected", "reason": APPLY_SAVE_FAILED}}
     return {"result": {"message": message, "recorded": True}}
 
 
@@ -583,30 +625,16 @@ def respond(state: AgentState) -> dict:
     result = state.get("result") or {}
     decision = state.get("decision")
 
-    if intent == UNSUPPORTED:
+    if intent in INTENT_REPLIES:                                # 업무를 처리하지 못함 (처리 불가·이해 실패·여러 업무·바쁨)
         labels = ", ".join(info["label"] for info in INTENTS.values())
-        # 인사·잡담도 여기로 온다 → 거절보다 "무엇을 말하면 되는지" 안내 (예시로 바로 따라 할 수 있게)
-        text = (f"저는 은행 업무만 도와드릴 수 있어요. 할 수 있는 일: {labels}\n"
-                "예) '내 계좌 전부 보여줘', '생활비에서 저축으로 10만 원 보내줘'")
-    elif intent == NOT_UNDERSTOOD:
-        text = "요청을 이해하지 못했어요. 다시 말씀해 주세요."
-    elif intent == MULTIPLE_REQUESTS:
-        text = ("한 번에 한 가지 요청만 처리할 수 있어요. 아무것도 실행하지 않았어요.\n"
-                "하나씩 말씀해 주세요. 예) '생활비에서 저축으로 10만 원 보내줘'")
-    elif intent == LLM_BUSY:
-        text = "지금 AI 서버가 바빠요. 잠시 후 같은 말을 다시 보내 주세요."
-    elif decision == "stop":
-        text = "알겠어요, 요청을 그만둘게요."
+        text = INTENT_REPLIES[intent].format(labels=labels)
+    elif decision == "stop":                                    # 되묻기에서 "취소" — missing보다 먼저 본다
+        text = DECISION_REPLIES["stop"]
     elif state.get("missing"):                                  # 되묻기를 MAX_ASKS번 해도 채우지 못함
-        text = "여러 번 여쭤봐도 필요한 정보를 알 수 없어 요청을 멈출게요. 처음부터 다시 말씀해 주세요."
-    elif decision == "reject":
+        text = ASK_LIMIT_REPLY
+    elif decision in DECISION_REPLIES:                          # 승인 화면에서 끝남 (취소·수정 초과·만료)
         label = INTENTS[intent]["label"]
-        text = f"{label}{josa(label, '을/를')} 취소했어요. 아무것도 바뀌지 않았어요."
-    elif decision == "too_many":
-        text = f"수정이 {MAX_REVISIONS}번을 넘어 요청을 끝냈어요. 아무것도 바뀌지 않았어요. 처음부터 다시 말씀해 주세요."
-    elif decision == "expired":
-        minutes = int(APPROVAL_TTL.total_seconds() // 60)
-        text = f"승인 시간({minutes}분)이 지나 안전을 위해 실행하지 않았어요. 다시 요청해 주세요."
+        text = DECISION_REPLIES[decision].format(label=label, eul=josa(label, "을/를"))
     elif result.get("notice") == "rejected":
         text = result["reason"]
     elif intent in READ_INTENTS:
