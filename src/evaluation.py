@@ -28,6 +28,7 @@ from langchain_core.messages import HumanMessage
 import data_store
 import graph as g
 from config import load_env
+from intents import MULTIPLE_REQUESTS, UNSUPPORTED
 
 # ── Golden set: 입력(inputs)과 기대값(reference) ─────────────────
 # stopped_at: 멈춘 노드. None = 멈추지 않고 답까지 끝남
@@ -52,6 +53,22 @@ GOLDEN_SET = [
      "reference": {"intent": "transfer_instant",
                    "params": {"to_account": "저축", "amount": 100000},
                    "stopped_at": "ask_more"}},
+    {"case_id": "card_lock",
+     "inputs": {"question" : "생활비 카드 잠가줘"},
+     "reference": {"intent": "card_lock_temporary",
+                   "params": {"card": "생활비 카드"},
+                   "stopped_at": "confirm_change"}},
+
+    {"case_id": "card_lock_no_card",
+     "inputs": {"question" : "카드 잠가줘"},
+     "reference": {"intent": "card_lock_temporary",
+                   "params": {},
+                   "stopped_at": "ask_more"}},
+    {"case_id": "unsupported_weather",
+     "inputs": {"question" : "오늘 날씨는 어때?"},
+     "reference": {"intent": "unsupported",
+                   "params": {},
+                   "stopped_at": None}},
 ]
 
 GUESS_LOG = "짐작한 출금 계좌를 비움"                             # graph.understand가 LLM의 짐작을 지울 때 남기는 로그
@@ -176,15 +193,16 @@ def run_experiment(repeat: int) -> None:
 
 
 # ── 오프라인 확인: 채점 함수가 맞게 가르는지 (가짜 LLM, API 없음) ───
+def _right_answer(reference: dict) -> dict:
+    """기대값대로 답하는 LLM의 답 — 사례를 추가해도 따로 적지 않게 기대값에서 만든다."""
+    if reference["intent"] == MULTIPLE_REQUESTS:                # LLM은 intent 대신 multiple 표시로 답한다
+        return {"intent": UNSUPPORTED, "multiple": True}
+    return {"intent": reference["intent"], **reference["params"]}
+
+
 def _self_check_offline() -> None:
     from scenarios import ScriptedLLM                           # 정해진 답을 내는 가짜 LLM
 
-    right = {                                                   # 사례마다 LLM이 올바로 답한 경우
-        "balance": {"intent": "account_list_with_balance", "accounts": ["생활비"]},
-        "transfer": {"intent": "transfer_instant", "from_account": "생활비", "to_account": "저축", "amount": 100000},
-        "missing_amount": {"intent": "transfer_instant", "from_account": "생활비", "to_account": "저축"},
-        "no_from_account": {"intent": "transfer_instant", "to_account": "저축", "amount": 100000},
-    }
     def ledgers() -> set:
         return set(data_store.LEDGER_DIR.glob("*.json")) if data_store.LEDGER_DIR.exists() else set()
 
@@ -193,14 +211,14 @@ def _self_check_offline() -> None:
     real_llm = g._get_llm
     try:
         for case in GOLDEN_SET:
-            g._get_llm = lambda answer=right[case["case_id"]]: ScriptedLLM([answer])
+            g._get_llm = lambda answer=_right_answer(case["reference"]): ScriptedLLM([answer])
             outputs = target(case["inputs"], g.build_graph())
             scores = [e(outputs, case["reference"])["score"] for e in EVALUATORS[:3]] + [llm_no_guess(outputs)["score"]]
             checks.append((f"{case['case_id']}: 올바른 답 → 네 항목 모두 통과", all(scores)))
 
         # B25 — LLM이 출금 계좌를 지어낸 경우: 코드가 지워서 결과는 맞지만, llm_no_guess는 잡아내야 한다
         case = next(c for c in GOLDEN_SET if c["case_id"] == "no_from_account")
-        g._get_llm = lambda: ScriptedLLM([{**right["no_from_account"], "from_account": "생활비"}])
+        g._get_llm = lambda: ScriptedLLM([{**_right_answer(case["reference"]), "from_account": "생활비"}])
         outputs = target(case["inputs"], g.build_graph())
         checks.append(("지어낸 출금 계좌 → llm_no_guess 실패", llm_no_guess(outputs)["score"] is False))
         checks.append(("지어낸 출금 계좌 → 코드가 비워서 params·멈춘 곳은 통과",
@@ -209,7 +227,7 @@ def _self_check_offline() -> None:
 
         # 금액을 틀리게 알아들은 경우 → params만 실패
         case = next(c for c in GOLDEN_SET if c["case_id"] == "transfer")
-        g._get_llm = lambda: ScriptedLLM([{**right["transfer"], "amount": 10000}])
+        g._get_llm = lambda: ScriptedLLM([{**_right_answer(case["reference"]), "amount": 10000}])
         outputs = target(case["inputs"], g.build_graph())
         checks.append(("금액 1만 원으로 오해 → params 실패, intent 통과",
                        not params_correct(outputs, case["reference"])["score"]

@@ -41,6 +41,12 @@ SESSION_WINDOW = max(window for _, window in SESSION_LIMITS)    # 이보다 오�
 DAILY_LIMIT = 50                                               # 서버 전체 하루 50번
 LEDGER_TTL = 24 * 3600                                         # 하루 지난 방문자 장부는 지운다
 
+# 오류 안내 문장 (HTTP 오류의 detail — 화면이 그대로 보여준다)
+SESSION_EXPIRED = "세션이 만료됐어요. 새로고침해 주세요."                       # 404
+TOO_MANY_REQUESTS = "요청이 너무 많아요. 잠시 후 다시 시도해 주세요."            # 429 — 방문자 제한
+DAILY_LIMIT_REACHED = "오늘 사용량이 다 찼어요. 내일 다시 시도해 주세요."        # 429 — 서버 전체 제한
+SERVER_CONFIG_ERROR = "서버 설정 문제로 지금은 답할 수 없어요."                  # 500 — API 키 문제
+
 app = FastAPI(title="은행 업무 도우미")
 try:
     load_env()                                                 # 첫 요청 전에 — LangSmith는 Tracing 여부를 처음 한 번만 읽고 기억한다
@@ -65,7 +71,7 @@ class ChatIn(SessionIn):
 # ── 도우미 ───────────────────────────────────────────────────────
 def _config(session_id: str) -> dict:
     if session_id not in _threads:                            # 서버가 다시 켜져서 모르는 세션 → 화면이 새로 만든다
-        raise HTTPException(404, "세션이 만료됐어요. 새로고침해 주세요.")
+        raise HTTPException(404, SESSION_EXPIRED)
     return {"configurable": {"thread_id": _threads[session_id]}}
 
 
@@ -76,11 +82,11 @@ def _check_limits(session_id: str) -> None:
     while recent and now - recent[0] > SESSION_WINDOW:
         recent.popleft()
     if any(sum(now - t <= window for t in recent) >= limit for limit, window in SESSION_LIMITS):
-        raise HTTPException(429, "요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+        raise HTTPException(429, TOO_MANY_REQUESTS)
     if _daily["day"] != date.today():
         _daily.update(day=date.today(), count=0)
     if _daily["count"] >= DAILY_LIMIT:
-        raise HTTPException(429, "오늘 사용량이 다 찼어요. 내일 다시 시도해 주세요.")
+        raise HTTPException(429, DAILY_LIMIT_REACHED)
     recent.append(now)
     _daily["count"] += 1
 
@@ -164,7 +170,7 @@ def chat(body: ChatIn):
             state = agent.invoke(payload, config)
         except ConfigError:
             logger.exception("chat: API 키 설정 문제")
-            raise HTTPException(500, "서버 설정 문제로 지금은 답할 수 없어요.")
+            raise HTTPException(500, SERVER_CONFIG_ERROR)
         interrupts = state.get("__interrupt__")
         if interrupts:
             value = interrupts[0].value
