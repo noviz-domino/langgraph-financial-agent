@@ -6,7 +6,7 @@
 - 저장은 **한 통로**(`data_store.save`)로만, 저장 전에 **무결성 규칙 10개**를 검사하고 한 번에 교체한다(atomic write)
 - 업무를 추가할 때 그래프는 고치지 않는다 — `functions.py`의 표(`READ_TASKS`, `HANDLERS`)에 한 줄
 
-KDT 과제 미니 프로젝트 · Python 3.13 · LangGraph 1.2 · LangChain 1.4 · Gemini `gemini-3.5-flash-lite`
+AI 에이전트 엔지니어 트랙 미니 프로젝트 · Python 3.13 · LangGraph 1.2 · LangChain 1.4 · Gemini `gemini-3.5-flash-lite`
 
 **직접 써 보기: https://noviz-bank.duckdns.org** (가상의 장부예요. 방문자마다 따로 있고 "처음으로"를 누르면 되돌아가요. Gemini 무료 등급이라 호출 횟수가 제한돼 있어요)
 
